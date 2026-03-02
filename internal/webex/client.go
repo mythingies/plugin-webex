@@ -327,6 +327,109 @@ func (c *Client) GetSpaceAnalytics(roomID string, daysBack int) (*SpaceAnalytics
 	}, nil
 }
 
+// Meeting represents a Webex meeting.
+type Meeting struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	MeetingNumber   string `json:"meetingNumber"`
+	MeetingType     string `json:"meetingType"`
+	State           string `json:"state"`
+	Start           string `json:"start"`
+	End             string `json:"end"`
+	Timezone        string `json:"timezone"`
+	Agenda          string `json:"agenda"`
+	HostEmail       string `json:"hostEmail"`
+	HostDisplayName string `json:"hostDisplayName"`
+	WebLink         string `json:"webLink"`
+}
+
+// Transcript represents a Webex meeting transcript.
+type Transcript struct {
+	ID              string `json:"id"`
+	MeetingID       string `json:"meetingId"`
+	MeetingTopic    string `json:"meetingTopic"`
+	StartTime       string `json:"startTime"`
+	VttDownloadLink string `json:"vttDownloadLink"`
+	TxtDownloadLink string `json:"txtDownloadLink"`
+	Status          string `json:"status"`
+}
+
+// ListMeetings returns meetings in a time range.
+func (c *Client) ListMeetings(from, to string, max int) ([]Meeting, error) {
+	params := url.Values{}
+	if from != "" {
+		params.Set("from", from)
+	}
+	if to != "" {
+		params.Set("to", to)
+	}
+	if max > 0 {
+		params.Set("max", fmt.Sprintf("%d", max))
+	}
+
+	var result struct {
+		Items []Meeting `json:"items"`
+	}
+	if err := c.get("/meetings", params, &result); err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// ListTranscripts returns transcripts for a meeting.
+func (c *Client) ListTranscripts(meetingID string, max int) ([]Transcript, error) {
+	params := url.Values{}
+	if meetingID != "" {
+		params.Set("meetingId", meetingID)
+	}
+	if max > 0 {
+		params.Set("max", fmt.Sprintf("%d", max))
+	}
+
+	var result struct {
+		Items []Transcript `json:"items"`
+	}
+	if err := c.get("/meetingTranscripts", params, &result); err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// DownloadTranscript downloads the content of a transcript as text.
+// Format should be "txt" or "vtt".
+func (c *Client) DownloadTranscript(transcriptID, format string) (string, error) {
+	if format == "" {
+		format = "txt"
+	}
+	params := url.Values{}
+	params.Set("format", format)
+
+	u := baseURL + "/meetingTranscripts/" + transcriptID + "/download?" + params.Encode()
+
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("executing request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("webex API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading transcript body: %w", err)
+	}
+	return string(body), nil
+}
+
 // Token returns the client's auth token (used by the listener).
 func (c *Client) Token() string {
 	return c.token

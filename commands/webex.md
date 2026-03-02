@@ -27,6 +27,12 @@ Webex workspace integration for Claude Code.
 - `/webex status` — Show connection state and notification buffer
 - `/webex notifications` — Show buffered inbound messages
 
+### Intelligence (v0.3)
+- `/webex meetings` — List upcoming meetings
+- `/webex transcript <meeting>` — Get meeting transcript
+- `/webex digest [space] [hours]` — Activity digest across spaces
+- `/webex context <query>` — Cross-space topic search with context
+
 ### Configuration
 - `/webex config` — Show current settings and agent routing
 

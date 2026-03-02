@@ -28,4 +28,10 @@ func Register(s *mcpserver.MCPServer, client *webex.Client, buf *buffer.RingBuff
 	registerGetSpaceAnalytics(s, client)
 	registerListenerControl(s, lst)
 	registerGetNotificationRoutes(s, rtr)
+
+	// v0.3 — intelligence.
+	registerListMeetings(s, client)
+	registerGetMeetingTranscript(s, client)
+	registerGetDigest(s, client)
+	registerGetCrossSpaceContext(s, client)
 }

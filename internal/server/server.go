@@ -51,7 +51,7 @@ func New(token, addr, configPath string) (*Server, error) {
 
 	s := mcpserver.NewMCPServer(
 		"webex",
-		"0.2.0",
+		"0.3.0",
 		mcpserver.WithToolCapabilities(true),
 	)
 
