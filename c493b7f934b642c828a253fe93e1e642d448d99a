@@ -1,0 +1,39 @@
+README.md
+  da2605ee78f09cd1 1-209
+CHANGELOG.md
+  da2605ee78f09cd1 8,11-54
+.github/workflows/build.yml
+  da2605ee78f09cd1 1-23
+.github/workflows/release.yml
+  da2605ee78f09cd1 1-56
+.github/workflows/test.yml
+  da2605ee78f09cd1 1-29
+.github/workflows/lint.yml
+  da2605ee78f09cd1 1-25
+internal/server/server.go
+  da2605ee78f09cd1 54
+.claude-plugin/plugin.json
+  da2605ee78f09cd1 8
+.golangci.yml
+  da2605ee78f09cd1 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.7",
+  "base_commit_sha": "c493b7f934b642c828a253fe93e1e642d448d99a",
+  "prompts": {
+    "da2605ee78f09cd1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "509501d9-b2ca-41ac-9930-7a665ef31bf3",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 402,
+      "total_deletions": 6,
+      "accepted_lines": 402,
+      "overriden_lines": 0
+    }
+  }
+}
