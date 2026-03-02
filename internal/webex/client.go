@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const baseURL = "https://webexapis.com/v1"
@@ -191,6 +192,144 @@ func (c *Client) get(path string, params url.Values, out interface{}) error {
 	}
 
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// Attachment represents a Webex message attachment (e.g., Adaptive Card).
+type Attachment struct {
+	ContentType string      `json:"contentType"`
+	Content     interface{} `json:"content"`
+}
+
+// SpaceAnalytics holds aggregated stats for a space.
+type SpaceAnalytics struct {
+	RoomID           string `json:"roomId"`
+	RoomTitle        string `json:"roomTitle"`
+	DaysBack         int    `json:"daysBack"`
+	MessageCount     int    `json:"messageCount"`
+	ActiveMembers    int    `json:"activeMembers"`
+	TotalMembers     int    `json:"totalMembers"`
+	PeakHour         int    `json:"peakHour"`
+	MostActivePerson string `json:"mostActivePerson"`
+}
+
+// SendAdaptiveCard sends an Adaptive Card to a space or person.
+// The card parameter should be the Adaptive Card JSON body (map or struct).
+func (c *Client) SendAdaptiveCard(roomID, toPersonEmail string, card interface{}) (*Message, error) {
+	body := map[string]interface{}{
+		"text": "Adaptive Card", // fallback text for clients that don't support cards
+		"attachments": []Attachment{
+			{
+				ContentType: "application/vnd.microsoft.card.adaptive",
+				Content:     card,
+			},
+		},
+	}
+	if roomID != "" {
+		body["roomId"] = roomID
+	}
+	if toPersonEmail != "" {
+		body["toPersonEmail"] = toPersonEmail
+	}
+
+	var msg Message
+	if err := c.post("/messages", body, &msg); err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
+// ShareFile is a placeholder for file upload/share (multipart upload deferred).
+func (c *Client) ShareFile(roomID, filePath string) error {
+	return fmt.Errorf("share_file is not yet implemented (multipart upload deferred to a future version)")
+}
+
+// GetSpaceAnalytics computes client-side analytics for a space over a time window.
+func (c *Client) GetSpaceAnalytics(roomID string, daysBack int) (*SpaceAnalytics, error) {
+	if daysBack <= 0 {
+		daysBack = 7
+	}
+
+	// Fetch messages (up to 1000, API max).
+	messages, err := c.GetMessages(roomID, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("fetching messages: %w", err)
+	}
+
+	// Fetch members.
+	members, err := c.ListMembers(roomID, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("fetching members: %w", err)
+	}
+
+	// Fetch space details for title.
+	spaces, err := c.ListSpaces(1000)
+	if err != nil {
+		return nil, fmt.Errorf("fetching spaces: %w", err)
+	}
+	var roomTitle string
+	for _, sp := range spaces {
+		if sp.ID == roomID {
+			roomTitle = sp.Title
+			break
+		}
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -daysBack)
+
+	hourCounts := make(map[int]int)
+	personCounts := make(map[string]int)
+	activeSet := make(map[string]bool)
+	messageCount := 0
+
+	for _, msg := range messages {
+		t, err := time.Parse(time.RFC3339, msg.Created)
+		if err != nil {
+			continue
+		}
+		if t.Before(cutoff) {
+			continue
+		}
+		messageCount++
+		hourCounts[t.Hour()]++
+		personCounts[msg.PersonEmail]++
+		activeSet[msg.PersonEmail] = true
+	}
+
+	// Find peak hour.
+	peakHour := 0
+	peakCount := 0
+	for h, c := range hourCounts {
+		if c > peakCount {
+			peakHour = h
+			peakCount = c
+		}
+	}
+
+	// Find most active person.
+	var mostActive string
+	mostActiveCount := 0
+	for p, c := range personCounts {
+		if c > mostActiveCount {
+			mostActive = p
+			mostActiveCount = c
+		}
+	}
+
+	return &SpaceAnalytics{
+		RoomID:           roomID,
+		RoomTitle:        roomTitle,
+		DaysBack:         daysBack,
+		MessageCount:     messageCount,
+		ActiveMembers:    len(activeSet),
+		TotalMembers:     len(members),
+		PeakHour:         peakHour,
+		MostActivePerson: mostActive,
+	}, nil
+}
+
+// Token returns the client's auth token (used by the listener).
+func (c *Client) Token() string {
+	return c.token
 }
 
 // post performs an authenticated POST request with JSON body.
