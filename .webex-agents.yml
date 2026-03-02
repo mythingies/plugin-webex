@@ -1,0 +1,45 @@
+# Agent routing configuration for inbound Webex messages.
+# Routes are evaluated top-to-bottom; first match wins.
+# Requires WebSocket listener to be active (/webex connect).
+
+routes:
+  # High-priority: alert spaces
+  - match:
+      space: "Production Alerts"
+    agent: alert-triage
+    priority: critical
+    auto_respond: false
+
+  # Keyword-based watchdog: escalate outage mentions anywhere
+  - match:
+      keywords: ["outage", "incident", "P1", "SEV"]
+      space: "*"
+    agent: escalation
+    priority: critical
+    action: notify_dm
+
+  # Direct messages: draft context-aware replies
+  - match:
+      direct: true
+    agent: dm-responder
+    priority: high
+    auto_respond: true
+
+  # Ops spaces: summarize activity
+  - match:
+      space: "Ops*"
+    agent: ops-summarizer
+    priority: medium
+    auto_respond: false
+
+  # Everything else
+  - match:
+      space: "*"
+    agent: general
+    priority: low
+    auto_respond: false
+
+settings:
+  buffer_size: 5000
+  check_interval: 15s
+  priority_levels: [critical, high, medium, low]

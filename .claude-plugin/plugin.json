@@ -1,0 +1,9 @@
+{
+  "name": "webex",
+  "description": "Webex workspace integration for Claude Code. Read messages, send replies, monitor spaces in real-time, route inbound messages to agents, and send rich Adaptive Cards. Surpasses basic chat plugins with priority inbox, watchdogs, cross-space intelligence, and automated workflows.",
+  "author": {
+    "name": "ecopelan",
+    "email": ""
+  },
+  "version": "0.1.0"
+}

@@ -1,0 +1,7 @@
+Build a claude plugin for Webex: https://code.claude.com/docs/en/plugins#submit-your-plugin-to-the-official-marketplace
+
+Utilizing the https://github.com/3rg0n/webex-message-handler I want to build a plug-in for claude code.
+
+Each commit needs to pass linting and testing. GitHub repo needs to be setup with actions, that lint and build and test and have release tags. Need to ensure we meet the claude code requirements.
+
+include changelog.md, contribute.md, mit license.
