@@ -1,0 +1,43 @@
+internal/tools/list_meetings.go
+  6b0b2a23137a9806 1-63
+.claude-plugin/plugin.json
+  6b0b2a23137a9806 8
+internal/webex/client.go
+  6b0b2a23137a9806 330-430
+internal/tools/get_digest_test.go
+  6b0b2a23137a9806 1-72
+internal/tools/tools.go
+  6b0b2a23137a9806 31-36
+internal/tools/get_digest.go
+  6b0b2a23137a9806 1-180
+internal/server/server.go
+  6b0b2a23137a9806 54
+internal/tools/get_cross_space_context_test.go
+  6b0b2a23137a9806 1-44
+internal/tools/get_cross_space_context.go
+  6b0b2a23137a9806 1-128
+commands/webex.md
+  6b0b2a23137a9806 30-35
+internal/tools/get_meeting_transcript.go
+  6b0b2a23137a9806 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.7",
+  "base_commit_sha": "24c54e4d9119aeab71565527e71e9b73ce0ba927",
+  "prompts": {
+    "6b0b2a23137a9806": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "767a6b2a-a1ae-4431-a873-e50b35f0f6c6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 659,
+      "total_deletions": 2,
+      "accepted_lines": 659,
+      "overriden_lines": 0
+    }
+  }
+}
