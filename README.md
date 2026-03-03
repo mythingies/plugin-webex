@@ -6,13 +6,32 @@ Cisco Webex integration for Claude Code — read messages, send replies, monitor
 
 ### Prerequisites
 
-- Go 1.22+
 - A Webex Personal Access Token ([generate one here](https://developer.webex.com/docs/getting-your-personal-access-token))
 
 ### Install
 
+#### curl (Linux / macOS)
+
 ```bash
-git clone https://github.com/ecopelan/plugin-webex.git
+curl -fsSL https://raw.githubusercontent.com/OWNER/plugin-webex/main/install.sh | sh
+```
+
+#### PowerShell (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/OWNER/plugin-webex/main/install.ps1 | iex
+```
+
+#### Go
+
+```bash
+go install github.com/OWNER/plugin-webex/cmd/webex-mcp@latest
+```
+
+#### From Source
+
+```bash
+git clone https://github.com/OWNER/plugin-webex.git
 cd plugin-webex
 make build
 ```
