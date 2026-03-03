@@ -1,0 +1,43 @@
+install.sh
+  c41631b1e5a4a8dc 1-120
+.github/workflows/release.yml
+  c41631b1e5a4a8dc 32,34-43,49-57,71-75,81-84
+  da2605ee78f09cd1 23
+install.ps1
+  c41631b1e5a4a8dc 1-96
+README.md
+  c41631b1e5a4a8dc 13-14,16-32,34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.7",
+  "base_commit_sha": "8a4544f388cc09896fa8ba13a53c737c37e425bc",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 271,
+      "total_deletions": 8,
+      "accepted_lines": 268,
+      "overriden_lines": 0
+    },
+    "da2605ee78f09cd1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "509501d9-b2ca-41ac-9930-7a665ef31bf3",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 6,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
