@@ -3,7 +3,7 @@ param(
     [string]$Version = ""
 )
 
-$Repo = "OWNER/plugin-webex"
+$Repo = "mythingies/plugin-webex"
 $ErrorActionPreference = "Stop"
 $Binary = "webex-mcp"
 

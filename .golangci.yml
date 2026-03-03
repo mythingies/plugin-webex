@@ -10,4 +10,4 @@ linters:
 
 linters-settings:
   goimports:
-    local-prefixes: github.com/ecopelan/plugin-webex
+    local-prefixes: github.com/mythingies/plugin-webex

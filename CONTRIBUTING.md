@@ -2,7 +2,7 @@
 
 ## Setup
 
-1. Install Go 1.22+
+1. Install Go 1.26+
 2. Install golangci-lint: `go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest`
 3. Clone the repo and run `make build`
 

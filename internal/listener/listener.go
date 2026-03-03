@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ecopelan/plugin-webex/internal/buffer"
-	"github.com/ecopelan/plugin-webex/internal/router"
-	"github.com/ecopelan/plugin-webex/internal/webex"
+	"github.com/mythingies/plugin-webex/internal/buffer"
+	"github.com/mythingies/plugin-webex/internal/router"
+	"github.com/mythingies/plugin-webex/internal/webex"
 
 	wmh "github.com/3rg0n/webex-message-handler/go"
 )

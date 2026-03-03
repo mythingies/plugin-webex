@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecopelan/plugin-webex/internal/buffer"
-	"github.com/ecopelan/plugin-webex/internal/router"
+	"github.com/mythingies/plugin-webex/internal/buffer"
+	"github.com/mythingies/plugin-webex/internal/router"
 
 	wmh "github.com/3rg0n/webex-message-handler/go"
 )
