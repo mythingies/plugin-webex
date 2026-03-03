@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.26"
 
       - name: Build
         env:
@@ -29,13 +29,32 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          go build -o "webex-mcp-${GOOS}-${GOARCH}${ext}" ./cmd/webex-mcp/
+          go build -o "webex-mcp${ext}" ./cmd/webex-mcp/
+
+      - name: Package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          if [ "$GOOS" = "windows" ]; then
+            zip "webex-mcp-${GOOS}-${GOARCH}.zip" webex-mcp.exe
+          else
+            tar -czf "webex-mcp-${GOOS}-${GOARCH}.tar.gz" webex-mcp
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: webex-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: webex-mcp-*
+          path: webex-mcp-*.tar.gz
+          if-no-files-found: ignore
+
+      - name: Upload artifact (zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: webex-mcp-${{ matrix.goos }}-${{ matrix.goarch }}-zip
+          path: webex-mcp-*.zip
+          if-no-files-found: ignore
 
   publish:
     needs: release
@@ -49,8 +68,17 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum webex-mcp-* > checksums.txt
+          cat checksums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/webex-mcp-*
+          files: |
+            dist/webex-mcp-*.tar.gz
+            dist/webex-mcp-*.zip
+            dist/checksums.txt
