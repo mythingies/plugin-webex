@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mythingies/plugin-webex/internal/router"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mythingies/plugin-webex/internal/router"
 )
 
 func registerGetNotificationRoutes(s *mcpserver.MCPServer, rtr *router.Router) {

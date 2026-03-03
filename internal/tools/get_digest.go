@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mythingies/plugin-webex/internal/webex"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
 func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
@@ -38,12 +38,12 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 		cutoff := time.Now().UTC().Add(-time.Duration(hoursBack) * time.Hour)
 
 		type spaceDigest struct {
-			Title       string
-			Messages    int
-			Authors     map[string]int
-			Highlights  []string
-			FirstMsg    time.Time
-			LastMsg     time.Time
+			Title      string
+			Messages   int
+			Authors    map[string]int
+			Highlights []string
+			FirstMsg   time.Time
+			LastMsg    time.Time
 		}
 
 		var spaces []webex.Space

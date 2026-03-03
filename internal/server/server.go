@@ -4,12 +4,12 @@ import (
 	"log/slog"
 	"os"
 
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/mythingies/plugin-webex/internal/buffer"
 	"github.com/mythingies/plugin-webex/internal/listener"
 	"github.com/mythingies/plugin-webex/internal/router"
 	"github.com/mythingies/plugin-webex/internal/tools"
 	"github.com/mythingies/plugin-webex/internal/webex"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // Server wraps the MCP server and Webex client.

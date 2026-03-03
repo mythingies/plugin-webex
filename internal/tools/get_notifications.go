@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mythingies/plugin-webex/internal/buffer"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mythingies/plugin-webex/internal/buffer"
 )
 
 func registerGetNotifications(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {

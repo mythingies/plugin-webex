@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mythingies/plugin-webex/internal/webex"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
 func registerSendMessage(s *mcpserver.MCPServer, client *webex.Client) {

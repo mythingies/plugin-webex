@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mythingies/plugin-webex/internal/listener"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mythingies/plugin-webex/internal/listener"
 )
 
 func registerListenerControl(s *mcpserver.MCPServer, lst *listener.Listener) {

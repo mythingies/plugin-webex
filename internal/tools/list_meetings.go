@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mythingies/plugin-webex/internal/webex"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
 func registerListMeetings(s *mcpserver.MCPServer, client *webex.Client) {
