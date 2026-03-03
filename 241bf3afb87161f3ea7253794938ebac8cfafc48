@@ -1,0 +1,57 @@
+README.md
+  c41631b1e5a4a8dc 16,22,28,34,184-220,263-266,269
+go.mod
+  c41631b1e5a4a8dc 1
+  da2605ee78f09cd1 3
+CONTRIBUTORS.md
+  c41631b1e5a4a8dc 1-13
+.github/workflows/lint.yml
+  da2605ee78f09cd1 20
+install.sh
+  c41631b1e5a4a8dc 3
+CONTRIBUTING.md
+  c41631b1e5a4a8dc 5
+.github/workflows/build.yml
+  da2605ee78f09cd1 20
+LICENSE
+  c41631b1e5a4a8dc 3
+.github/workflows/test.yml
+  da2605ee78f09cd1 20
+install.ps1
+  c41631b1e5a4a8dc 6
+CHANGELOG.md
+  c41631b1e5a4a8dc 8-23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.7",
+  "base_commit_sha": "241bf3afb87161f3ea7253794938ebac8cfafc48",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 80,
+      "total_deletions": 10,
+      "accepted_lines": 80,
+      "overriden_lines": 0
+    },
+    "da2605ee78f09cd1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "509501d9-b2ca-41ac-9930-7a665ef31bf3",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    }
+  }
+}
