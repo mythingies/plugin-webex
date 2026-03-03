@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ecopelan/plugin-webex/internal/buffer"
+	"github.com/mythingies/plugin-webex/internal/buffer"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

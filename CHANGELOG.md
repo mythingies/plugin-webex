@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-03-03
+
+### Added
+- Cross-platform installer scripts (`install.sh` for Linux/macOS, `install.ps1` for Windows)
+- SHA256 checksum verification in both installers
+- `checksums.txt` generation in release workflow
+- Archive packaging in release workflow (`.tar.gz` for linux/darwin, `.zip` for windows)
+- `CONTRIBUTORS.md`
+- Deployment documentation in README
+
+### Changed
+- Migrated repository to `mythingies/plugin-webex`
+- Updated module path to `github.com/mythingies/plugin-webex`
+- README install section now includes curl, PowerShell, and `go install` methods
+- Release workflow produces properly named archives instead of raw binaries
+
 ## [1.0.0] - 2026-03-02
 
 ### Added

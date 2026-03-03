@@ -1,6 +1,6 @@
 #!/bin/sh
 set -euo pipefail
-REPO="OWNER/plugin-webex"
+REPO="mythingies/plugin-webex"
 
 VERSION="${1:-}"
 INSTALL_DIR="${HOME}/.local/bin"

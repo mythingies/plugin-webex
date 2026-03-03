@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ecopelan/plugin-webex/internal/webex"
+	"github.com/mythingies/plugin-webex/internal/webex"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )

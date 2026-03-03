@@ -13,25 +13,25 @@ Cisco Webex integration for Claude Code — read messages, send replies, monitor
 #### curl (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/OWNER/plugin-webex/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mythingies/plugin-webex/main/install.sh | sh
 ```
 
 #### PowerShell (Windows)
 
 ```powershell
-irm https://raw.githubusercontent.com/OWNER/plugin-webex/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/mythingies/plugin-webex/main/install.ps1 | iex
 ```
 
 #### Go
 
 ```bash
-go install github.com/OWNER/plugin-webex/cmd/webex-mcp@latest
+go install github.com/mythingies/plugin-webex/cmd/webex-mcp@latest
 ```
 
 #### From Source
 
 ```bash
-git clone https://github.com/OWNER/plugin-webex.git
+git clone https://github.com/mythingies/plugin-webex.git
 cd plugin-webex
 make build
 ```
@@ -181,6 +181,43 @@ settings:
 - `auto_respond` — If `true`, Claude drafts a reply automatically.
 - `action` — Optional action (e.g. `notify_dm` to send a DM notification).
 
+## Deployment
+
+### Releasing a New Version
+
+This project follows [Semantic Versioning](https://semver.org/). Releases are automated via GitHub Actions.
+
+1. **Update CHANGELOG.md** with the new version entry
+2. **Tag the release** and push:
+
+```bash
+git tag v0.6.0
+git push origin main --tags
+```
+
+3. The **Release** workflow automatically:
+   - Cross-compiles binaries for linux/darwin/windows (amd64 + arm64)
+   - Packages them as `.tar.gz` (linux/darwin) and `.zip` (windows)
+   - Generates `checksums.txt` (SHA256)
+   - Creates a GitHub Release with all assets
+
+### Version Scheme
+
+| Bump | When | Example |
+|---|---|---|
+| **Patch** (`0.5.x`) | Bug fixes, docs | `v0.5.0` -> `v0.5.1` |
+| **Minor** (`0.x.0`) | New features, backward-compatible | `v0.5.0` -> `v0.6.0` |
+| **Major** (`x.0.0`) | Breaking changes | `v0.5.0` -> `v1.0.0` |
+
+### CI/CD Pipelines
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| **Build** | Push/PR to `main` | Compile verification |
+| **Lint** | Push/PR to `main` | golangci-lint static analysis |
+| **Test** | Push/PR to `main` | Unit tests with race detection + coverage |
+| **Release** | Tag `v*` | Cross-platform build, package, and publish |
+
 ## Security
 
 - **Token handling**: `WEBEX_TOKEN` is read from the environment at startup and passed in-memory to the HTTP client. It is never logged, written to disk, or exposed through MCP tool responses.
@@ -223,6 +260,10 @@ plugin-webex/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+## Contributors
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) - Copyright (c) 2026 mythingies

@@ -4,11 +4,11 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/ecopelan/plugin-webex/internal/buffer"
-	"github.com/ecopelan/plugin-webex/internal/listener"
-	"github.com/ecopelan/plugin-webex/internal/router"
-	"github.com/ecopelan/plugin-webex/internal/tools"
-	"github.com/ecopelan/plugin-webex/internal/webex"
+	"github.com/mythingies/plugin-webex/internal/buffer"
+	"github.com/mythingies/plugin-webex/internal/listener"
+	"github.com/mythingies/plugin-webex/internal/router"
+	"github.com/mythingies/plugin-webex/internal/tools"
+	"github.com/mythingies/plugin-webex/internal/webex"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 

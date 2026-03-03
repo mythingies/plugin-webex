@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/ecopelan/plugin-webex/internal/server"
+	"github.com/mythingies/plugin-webex/internal/server"
 )
 
 func main() {
