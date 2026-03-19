@@ -3,15 +3,24 @@ package listener
 import (
 	"context"
 	"fmt"
+	"html"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
 
+	wmh "github.com/3rg0n/webex-message-handler/go"
+
 	"github.com/mythingies/plugin-webex/internal/buffer"
 	"github.com/mythingies/plugin-webex/internal/router"
 	"github.com/mythingies/plugin-webex/internal/webex"
+)
 
-	wmh "github.com/3rg0n/webex-message-handler/go"
+const (
+	// maxCacheSize limits the space name cache to prevent unbounded growth.
+	maxCacheSize = 2000
+	// rateLimit is the max messages processed per second.
+	rateLimit = 100
 )
 
 // ListenerStatus reports the current state of the WebSocket listener.
@@ -39,6 +48,11 @@ type Listener struct {
 	cancel   context.CancelFunc
 	received int64
 	errors   int64
+
+	// Rate limiting: token bucket.
+	rateMu      sync.Mutex
+	rateTokens  int
+	rateResetAt time.Time
 }
 
 // New creates a Listener. Call Start() to begin receiving messages.
@@ -49,6 +63,7 @@ func New(token string, client *webex.Client, buf *buffer.RingBuffer, rtr *router
 		buf:        buf,
 		rtr:        rtr,
 		spaceNames: make(map[string]string),
+		rateTokens: rateLimit,
 	}
 }
 
@@ -68,9 +83,10 @@ func (l *Listener) Start(ctx context.Context) error {
 	}
 	l.selfPersonID = me.ID
 
+	// Use a no-op logger to prevent token leakage from the wmh library.
 	handler, err := wmh.New(wmh.Config{
 		Token:  l.token,
-		Logger: wmh.NewSlogLogger(slog.Default()),
+		Logger: wmh.NewSlogLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	if err != nil {
 		return fmt.Errorf("creating WebSocket handler: %w", err)
@@ -109,7 +125,9 @@ func (l *Listener) Stop(ctx context.Context) error {
 	}
 
 	if l.handler != nil {
-		_ = l.handler.Disconnect(ctx)
+		if err := l.handler.Disconnect(ctx); err != nil {
+			slog.Warn("error disconnecting WebSocket handler", "error", err)
+		}
 	}
 	if l.cancel != nil {
 		l.cancel()
@@ -153,8 +171,31 @@ func (l *Listener) Status() ListenerStatus {
 	return st
 }
 
+// rateLimitAllow implements a simple token bucket rate limiter.
+func (l *Listener) rateLimitAllow() bool {
+	l.rateMu.Lock()
+	defer l.rateMu.Unlock()
+
+	now := time.Now()
+	if now.After(l.rateResetAt) {
+		l.rateTokens = rateLimit
+		l.rateResetAt = now.Add(time.Second)
+	}
+	if l.rateTokens <= 0 {
+		return false
+	}
+	l.rateTokens--
+	return true
+}
+
 // onMessage processes an inbound message: enriches, routes, and buffers it.
 func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
+	// Rate limiting.
+	if !l.rateLimitAllow() {
+		slog.Warn("message rate limit exceeded, dropping message")
+		return
+	}
+
 	// Loop detection: ignore messages from self.
 	if msg.PersonID == l.selfPersonID {
 		return
@@ -163,11 +204,14 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 	// Resolve space name (cached).
 	roomTitle := l.resolveSpaceName(msg.RoomID)
 
+	// Sanitize inbound text before routing.
+	sanitizedText := html.EscapeString(msg.Text)
+
 	// Route the message.
 	inbound := router.InboundMessage{
 		RoomTitle: roomTitle,
 		RoomType:  msg.RoomType,
-		Text:      msg.Text,
+		Text:      sanitizedText,
 	}
 
 	var priority, agent string
@@ -180,7 +224,11 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 		agent = ""
 	}
 
-	created, _ := time.Parse(time.RFC3339, msg.Created)
+	created, err := time.Parse(time.RFC3339, msg.Created)
+	if err != nil {
+		slog.Warn("failed to parse message timestamp", "error", err, "created", msg.Created)
+		created = time.Now()
+	}
 
 	notif := buffer.NotificationMessage{
 		ID:          msg.ID,
@@ -188,8 +236,8 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 		RoomTitle:   roomTitle,
 		PersonID:    msg.PersonID,
 		PersonEmail: msg.PersonEmail,
-		Text:        msg.Text,
-		HTML:        msg.HTML,
+		Text:        sanitizedText,
+		HTML:        html.EscapeString(msg.HTML),
 		Created:     created,
 		Priority:    priority,
 		RoutedAgent: agent,
@@ -218,11 +266,17 @@ func (l *Listener) resolveSpaceName(roomID string) string {
 	}
 
 	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Evict cache if too large to prevent unbounded growth.
+	if len(l.spaceNames) > maxCacheSize {
+		l.spaceNames = make(map[string]string)
+	}
+
 	for _, sp := range spaces {
 		l.spaceNames[sp.ID] = sp.Title
 	}
 	title := l.spaceNames[roomID]
-	l.mu.Unlock()
 
 	if title == "" {
 		return roomID

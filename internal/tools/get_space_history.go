@@ -28,7 +28,7 @@ func registerGetSpaceHistory(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError("room_id is required"), nil
 		}
 
-		max := req.GetInt("max", 20)
+		max := clampInt(req.GetInt("max", 20), 1, 1000)
 
 		messages, err := client.GetMessages(roomID, max)
 		if err != nil {

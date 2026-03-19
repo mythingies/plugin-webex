@@ -32,9 +32,9 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		roomID := req.GetString("room_id", "")
-		hoursBack := req.GetInt("hours_back", 24)
-		maxSpaces := req.GetInt("max_spaces", 10)
-		maxMessages := req.GetInt("max_messages", 200)
+		hoursBack := clampInt(req.GetInt("hours_back", 24), 1, 720)
+		maxSpaces := clampInt(req.GetInt("max_spaces", 10), 1, 100)
+		maxMessages := clampInt(req.GetInt("max_messages", 200), 1, 1000)
 
 		cutoff := time.Now().UTC().Add(-time.Duration(hoursBack) * time.Hour)
 

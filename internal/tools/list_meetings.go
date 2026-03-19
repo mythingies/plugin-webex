@@ -28,7 +28,7 @@ func registerListMeetings(s *mcpserver.MCPServer, client *webex.Client) {
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		from := req.GetString("from", "")
 		to := req.GetString("to", "")
-		max := req.GetInt("max", 20)
+		max := clampInt(req.GetInt("max", 20), 1, 100)
 
 		// Default: now to 7 days from now.
 		if from == "" {

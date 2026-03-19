@@ -9,6 +9,17 @@ import (
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
+// clampInt clamps a value between min and max bounds.
+func clampInt(val, min, max int) int {
+	if val < min {
+		return min
+	}
+	if val > max {
+		return max
+	}
+	return val
+}
+
 // Register adds all MCP tools to the server.
 func Register(s *mcpserver.MCPServer, client *webex.Client, buf *buffer.RingBuffer, rtr *router.Router, lst *listener.Listener) {
 	// v0.1 — core tools (Slack parity).

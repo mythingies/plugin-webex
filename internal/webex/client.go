@@ -1,9 +1,11 @@
 package webex
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,17 +14,32 @@ import (
 
 const baseURL = "https://webexapis.com/v1"
 
+// maxResponseSize limits API response bodies to 50MB to prevent OOM.
+const maxResponseSize = 50 * 1024 * 1024
+
 // Client is a lightweight Webex REST API client using a Personal Access Token.
 type Client struct {
 	token      string
 	httpClient *http.Client
 }
 
-// NewClient creates a new Webex API client.
+// NewClient creates a new Webex API client with security-hardened defaults.
 func NewClient(token string) *Client {
 	return &Client{
-		token:      token,
-		httpClient: &http.Client{},
+		token: strings.TrimSpace(token),
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("too many redirects")
+				}
+				// Block redirects to different hosts to prevent token leakage.
+				if len(via) > 0 && via[0].URL.Host != req.URL.Host {
+					return fmt.Errorf("redirect to different host blocked")
+				}
+				return nil
+			},
+		},
 	}
 }
 
@@ -121,7 +138,7 @@ func (c *Client) SendMessage(roomID, toPersonID, toPersonEmail, parentID, text s
 // GetPerson returns a person's profile by ID.
 func (c *Client) GetPerson(personID string) (*Person, error) {
 	var person Person
-	if err := c.get("/people/"+personID, nil, &person); err != nil {
+	if err := c.get("/people/"+url.PathEscape(personID), nil, &person); err != nil {
 		return nil, err
 	}
 	return &person, nil
@@ -167,6 +184,11 @@ func (c *Client) ListMembers(roomID string, max int) ([]Person, error) {
 	return people, nil
 }
 
+// readLimitedBody reads a response body with a size limit.
+func readLimitedBody(body io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(body, maxResponseSize))
+}
+
 // get performs an authenticated GET request.
 func (c *Client) get(path string, params url.Values, out interface{}) error {
 	u := baseURL + path
@@ -187,11 +209,15 @@ func (c *Client) get(path string, params url.Values, out interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("webex API error %d: %s", resp.StatusCode, string(body))
+		body, err := readLimitedBody(resp.Body)
+		if err != nil {
+			slog.Debug("failed to read error response body", "error", err)
+		}
+		slog.Debug("webex API error", "status", resp.StatusCode, "body", string(body))
+		return fmt.Errorf("webex API error (status %d)", resp.StatusCode)
 	}
 
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(out)
 }
 
 // Attachment represents a Webex message attachment (e.g., Adaptive Card).
@@ -404,7 +430,7 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	params := url.Values{}
 	params.Set("format", format)
 
-	u := baseURL + "/meetingTranscripts/" + transcriptID + "/download?" + params.Encode()
+	u := baseURL + "/meetingTranscripts/" + url.PathEscape(transcriptID) + "/download?" + params.Encode()
 
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
@@ -419,20 +445,19 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("webex API error %d: %s", resp.StatusCode, string(body))
+		body, err := readLimitedBody(resp.Body)
+		if err != nil {
+			slog.Debug("failed to read error response body", "error", err)
+		}
+		slog.Debug("webex API error", "status", resp.StatusCode, "body", string(body))
+		return "", fmt.Errorf("webex API error (status %d)", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimitedBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("reading transcript body: %w", err)
 	}
 	return string(body), nil
-}
-
-// Token returns the client's auth token (used by the listener).
-func (c *Client) Token() string {
-	return c.token
 }
 
 // post performs an authenticated POST request with JSON body.
@@ -442,7 +467,7 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 		return fmt.Errorf("marshaling body: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+path, strings.NewReader(string(jsonBody)))
+	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(jsonBody))
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
@@ -456,9 +481,13 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("webex API error %d: %s", resp.StatusCode, string(respBody))
+		respBody, err := readLimitedBody(resp.Body)
+		if err != nil {
+			slog.Debug("failed to read error response body", "error", err)
+		}
+		slog.Debug("webex API error", "status", resp.StatusCode, "body", string(respBody))
+		return fmt.Errorf("webex API error (status %d)", resp.StatusCode)
 	}
 
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(out)
 }
