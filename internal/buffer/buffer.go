@@ -55,21 +55,21 @@ func (b *RingBuffer) Push(msg NotificationMessage) {
 // Drain removes and returns all messages from the buffer, newest first.
 func (b *RingBuffer) Drain() []NotificationMessage {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	if len(b.items) == 0 {
-		return nil
+		b.mu.Unlock()
+		return []NotificationMessage{}
 	}
 
-	out := make([]NotificationMessage, len(b.items))
-	copy(out, b.items)
-	b.items = b.items[:0]
+	// Swap out items under lock, then reverse outside lock.
+	items := b.items
+	b.items = make([]NotificationMessage, 0, b.maxSize)
+	b.mu.Unlock()
 
 	// Reverse so newest is first.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
 	}
-	return out
+	return items
 }
 
 // DrainByPriority removes and returns only messages matching the given priorities, newest first.
@@ -80,8 +80,6 @@ func (b *RingBuffer) DrainByPriority(priorities []string) []NotificationMessage 
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	var matched, remaining []NotificationMessage
 	for _, msg := range b.items {
 		if pset[msg.Priority] {
@@ -91,10 +89,14 @@ func (b *RingBuffer) DrainByPriority(priorities []string) []NotificationMessage 
 		}
 	}
 	b.items = remaining
+	b.mu.Unlock()
 
 	// Reverse so newest is first.
 	for i, j := 0, len(matched)-1; i < j; i, j = i+1, j-1 {
 		matched[i], matched[j] = matched[j], matched[i]
+	}
+	if matched == nil {
+		return []NotificationMessage{}
 	}
 	return matched
 }
@@ -105,7 +107,7 @@ func (b *RingBuffer) Peek(n int) []NotificationMessage {
 	defer b.mu.Unlock()
 
 	if n <= 0 || len(b.items) == 0 {
-		return nil
+		return []NotificationMessage{}
 	}
 	if n > len(b.items) {
 		n = len(b.items)

@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/mythingies/plugin-webex/internal/server"
 )
 
 func main() {
-	token := os.Getenv("WEBEX_TOKEN")
+	token := strings.TrimSpace(os.Getenv("WEBEX_TOKEN"))
 	if token == "" {
 		log.Fatal("WEBEX_TOKEN environment variable is required. Generate one at https://developer.webex.com/docs/getting-your-personal-access-token")
 	}

@@ -20,7 +20,7 @@ func registerGetMentions(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 	)
 
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		max := req.GetInt("max", 100)
+		max := clampInt(req.GetInt("max", 100), 1, 5000)
 
 		messages := buf.Peek(max)
 		if len(messages) == 0 {

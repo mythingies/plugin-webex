@@ -42,7 +42,7 @@ function Install-WebexMcp {
     $checksumsUrl = "https://github.com/$Repo/releases/download/$Version/checksums.txt"
 
     $installDir = Join-Path $env:LOCALAPPDATA "$Binary\bin"
-    $tmpDir = Join-Path $env:TEMP "webex-mcp-install-$(Get-Random)"
+    $tmpDir = Join-Path $env:TEMP "webex-mcp-install-$([System.Guid]::NewGuid())"
 
     try {
         New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
@@ -56,11 +56,11 @@ function Install-WebexMcp {
 
         # verify checksum
         Write-Host "Verifying checksum..."
-        $checksumLine = Get-Content $checksumsPath | Where-Object { $_ -match $archive }
+        $checksumLine = Get-Content $checksumsPath | Where-Object { $_ -like "*  $archive" }
         if (-not $checksumLine) {
             throw "No checksum found for $archive"
         }
-        $expected = ($checksumLine -split '\s+')[0]
+        $expected = ($checksumLine -split '\s+')[0].ToLower()
         $actual = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLower()
 
         if ($expected -ne $actual) {

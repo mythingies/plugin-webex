@@ -19,7 +19,7 @@ func registerListSpaces(s *mcpserver.MCPServer, client *webex.Client) {
 	)
 
 	s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		max := req.GetInt("max", 50)
+		max := clampInt(req.GetInt("max", 50), 1, 1000)
 
 		spaces, err := client.ListSpaces(max)
 		if err != nil {

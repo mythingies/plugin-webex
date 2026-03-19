@@ -57,8 +57,8 @@ func TestPushAndDrain(t *testing.T) {
 func TestDrainEmpty(t *testing.T) {
 	b := New(10)
 	drained := b.Drain()
-	if drained != nil {
-		t.Errorf("expected nil from empty drain, got %d items", len(drained))
+	if len(drained) != 0 {
+		t.Errorf("expected empty slice from empty drain, got %d items", len(drained))
 	}
 }
 
@@ -152,8 +152,8 @@ func TestPeekMoreThanAvailable(t *testing.T) {
 func TestPeekEmpty(t *testing.T) {
 	b := New(10)
 	peeked := b.Peek(5)
-	if peeked != nil {
-		t.Errorf("expected nil from empty peek, got %d items", len(peeked))
+	if len(peeked) != 0 {
+		t.Errorf("expected empty slice from empty peek, got %d items", len(peeked))
 	}
 }
 

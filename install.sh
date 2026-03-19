@@ -81,7 +81,7 @@ download_and_install() {
   # verify checksum
   log "Verifying checksum..."
   local expected actual
-  expected=$(grep "${archive}" "${tmpdir}/checksums.txt" | awk '{print $1}')
+  expected=$(grep -E "^[a-f0-9]{64}  ${archive}$" "${tmpdir}/checksums.txt" | awk '{print $1}')
   [ -n "$expected" ] || die "No checksum found for ${archive}"
 
   if command -v sha256sum >/dev/null 2>&1; then

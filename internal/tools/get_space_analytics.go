@@ -28,7 +28,7 @@ func registerGetSpaceAnalytics(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError("room_id is required"), nil
 		}
 
-		daysBack := req.GetInt("days_back", 7)
+		daysBack := clampInt(req.GetInt("days_back", 7), 1, 90)
 
 		analytics, err := client.GetSpaceAnalytics(roomID, daysBack)
 		if err != nil {

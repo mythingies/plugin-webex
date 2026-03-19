@@ -1,6 +1,7 @@
 package router
 
 import (
+	"log/slog"
 	"strings"
 	"sync"
 )
@@ -76,8 +77,11 @@ func (r *Router) Reload() error {
 	}
 
 	r.mu.Lock()
+	oldRouteCount := len(r.cfg.Routes)
 	r.cfg = cfg
 	r.mu.Unlock()
+
+	slog.Info("router config reloaded", "routes", len(cfg.Routes), "previous_routes", oldRouteCount)
 	return nil
 }
 

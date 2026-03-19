@@ -29,7 +29,7 @@ func registerGetUsers(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError("room_id is required"), nil
 		}
 
-		max := req.GetInt("max", 100)
+		max := clampInt(req.GetInt("max", 100), 1, 1000)
 
 		members, err := client.ListMembers(roomID, max)
 		if err != nil {

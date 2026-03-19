@@ -32,8 +32,8 @@ func registerGetCrossSpaceContext(s *mcpserver.MCPServer, client *webex.Client) 
 			return mcp.NewToolResultError("query is required"), nil
 		}
 
-		maxSpaces := req.GetInt("max_spaces", 10)
-		maxMessages := req.GetInt("max_messages", 100)
+		maxSpaces := clampInt(req.GetInt("max_spaces", 10), 1, 100)
+		maxMessages := clampInt(req.GetInt("max_messages", 100), 1, 1000)
 		queryLower := strings.ToLower(query)
 
 		spaces, err := client.ListSpaces(maxSpaces)
