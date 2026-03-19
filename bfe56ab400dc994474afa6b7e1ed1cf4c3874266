@@ -1,0 +1,69 @@
+internal/buffer/buffer.go
+  c41631b1e5a4a8dc 59-60,63-66,69-70,72,92,98-99,110
+internal/tools/get_mentions.go
+  c41631b1e5a4a8dc 23
+internal/tools/get_cross_space_context.go
+  c41631b1e5a4a8dc 35-36
+.github/workflows/release.yml
+  c41631b1e5a4a8dc 19,21,46,53,63,66,78
+install.ps1
+  c41631b1e5a4a8dc 45,59,63
+.github/workflows/build.yml
+  c41631b1e5a4a8dc 16,18
+internal/tools/people.go
+  c41631b1e5a4a8dc 32
+Makefile
+  c41631b1e5a4a8dc 16
+.github/workflows/test.yml
+  c41631b1e5a4a8dc 16,18,26
+internal/webex/client.go
+  c41631b1e5a4a8dc 4,8,17-19,26,29-41,141,187-191,212-217,220,433,448-453,456,470,484-489,492
+internal/listener/listener.go
+  c41631b1e5a4a8dc 6-7,12-13,17,19-23,51-55,66,86,89,128-130,174-188,193-198,207-209,214,227-231,239-240,269-275
+internal/tools/get_space_analytics.go
+  c41631b1e5a4a8dc 31
+internal/buffer/buffer_test.go
+  c41631b1e5a4a8dc 60-61,155-156
+internal/tools/list_spaces.go
+  c41631b1e5a4a8dc 22
+internal/router/router.go
+  c41631b1e5a4a8dc 4,80,83-84
+install.sh
+  c41631b1e5a4a8dc 84
+internal/tools/search_messages.go
+  c41631b1e5a4a8dc 39-40
+internal/tools/tools.go
+  c41631b1e5a4a8dc 12-22
+cmd/webex-mcp/main.go
+  c41631b1e5a4a8dc 7,13
+internal/router/config.go
+  c41631b1e5a4a8dc 6-7,12-14,46-52,54-58,63,77-80,84-97
+.github/workflows/lint.yml
+  c41631b1e5a4a8dc 16,18,23,25
+internal/tools/get_space_history.go
+  c41631b1e5a4a8dc 31
+internal/tools/list_meetings.go
+  c41631b1e5a4a8dc 31
+internal/tools/get_digest.go
+  c41631b1e5a4a8dc 35-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "bfe56ab400dc994474afa6b7e1ed1cf4c3874266",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 218,
+      "total_deletions": 82,
+      "accepted_lines": 217,
+      "overriden_lines": 0
+    }
+  }
+}
