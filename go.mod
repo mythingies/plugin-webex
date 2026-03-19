@@ -3,7 +3,7 @@ module github.com/mythingies/plugin-webex
 go 1.26.0
 
 require (
-	github.com/3rg0n/webex-message-handler/go v0.5.0
+	github.com/3rg0n/webex-message-handler/go v0.6.0
 	github.com/mark3labs/mcp-go v0.44.1
 	gopkg.in/yaml.v3 v3.0.1
 )
