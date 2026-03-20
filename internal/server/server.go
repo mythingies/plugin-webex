@@ -25,8 +25,8 @@ type Server struct {
 
 // New creates a new MCP server wired to Webex tools.
 // configPath points to .webex-agents.yml; if empty or missing, defaults are used.
-func New(token, addr, configPath string) (*Server, error) {
-	client := webex.NewClient(token)
+func New(provider webex.TokenProvider, addr, configPath string) (*Server, error) {
+	client := webex.NewClient(provider)
 
 	// Load routing config (optional).
 	var cfg *router.Config
@@ -48,7 +48,7 @@ func New(token, addr, configPath string) (*Server, error) {
 
 	buf := buffer.New(cfg.Settings.BufferSize)
 	rtr := router.NewRouter(cfg, configPath)
-	lst := listener.New(token, client, buf, rtr)
+	lst := listener.New(provider, client, buf, rtr)
 
 	s := mcpserver.NewMCPServer(
 		"webex",

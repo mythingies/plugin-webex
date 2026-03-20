@@ -38,6 +38,9 @@ func registerSendAdaptiveCard(s *mcpserver.MCPServer, client *webex.Client) {
 		if err != nil {
 			return mcp.NewToolResultError("card_json is required"), nil
 		}
+		if len(cardJSON) > maxCardJSONLen {
+			return mcp.NewToolResultError(fmt.Sprintf("card_json too large (%d bytes, max %d)", len(cardJSON), maxCardJSONLen)), nil
+		}
 
 		var card interface{}
 		if err := json.Unmarshal([]byte(cardJSON), &card); err != nil {

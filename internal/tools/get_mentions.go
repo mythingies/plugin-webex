@@ -53,13 +53,16 @@ func containsMention(text string) bool {
 	return strings.Contains(text, "@")
 }
 
-// extractMentions finds @word patterns in text.
+// extractMentions finds @word patterns in text (capped to prevent abuse).
 func extractMentions(text string) string {
 	var found []string
 	words := strings.Fields(text)
 	for _, w := range words {
 		if strings.HasPrefix(w, "@") && len(w) > 1 {
 			found = append(found, w)
+			if len(found) >= maxMentionsPerMessage {
+				break
+			}
 		}
 	}
 	if len(found) == 0 {

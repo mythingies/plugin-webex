@@ -10,6 +10,11 @@ import (
 	wmh "github.com/3rg0n/webex-message-handler/go"
 )
 
+// staticToken is a test helper that implements webex.TokenProvider.
+type staticToken string
+
+func (t staticToken) Token() (string, error) { return string(t), nil }
+
 // TestOnMessageRouteAndBuffer verifies that the onMessage callback
 // correctly routes a message and pushes it to the buffer.
 func TestOnMessageRouteAndBuffer(t *testing.T) {
@@ -31,11 +36,11 @@ func TestOnMessageRouteAndBuffer(t *testing.T) {
 	buf := buffer.New(100)
 
 	l := &Listener{
-		token:        "fake",
-		buf:          buf,
-		rtr:          rtr,
-		selfPersonID: "self-id",
-		spaceNames:   map[string]string{"room1": "Alerts", "room2": "General Chat"},
+		tokenProvider: staticToken("fake"),
+		buf:           buf,
+		rtr:           rtr,
+		selfPersonID:  "self-id",
+		spaceNames:    map[string]string{"room1": "Alerts", "room2": "General Chat"},
 	}
 
 	// Send a message to "Alerts" space.
@@ -81,11 +86,11 @@ func TestOnMessageSelfLoop(t *testing.T) {
 	buf := buffer.New(100)
 
 	l := &Listener{
-		token:        "fake",
-		buf:          buf,
-		rtr:          rtr,
-		selfPersonID: "my-person-id",
-		spaceNames:   map[string]string{"room1": "Test"},
+		tokenProvider: staticToken("fake"),
+		buf:           buf,
+		rtr:           rtr,
+		selfPersonID:  "my-person-id",
+		spaceNames:    map[string]string{"room1": "Test"},
 	}
 
 	// Message from self should be ignored.
@@ -112,11 +117,11 @@ func TestOnMessageNoRouteMatch(t *testing.T) {
 	buf := buffer.New(100)
 
 	l := &Listener{
-		token:        "fake",
-		buf:          buf,
-		rtr:          rtr,
-		selfPersonID: "self-id",
-		spaceNames:   map[string]string{"room1": "Unrouted Space"},
+		tokenProvider: staticToken("fake"),
+		buf:           buf,
+		rtr:           rtr,
+		selfPersonID:  "self-id",
+		spaceNames:    map[string]string{"room1": "Unrouted Space"},
 	}
 
 	l.onMessage(wmh.DecryptedMessage{
@@ -171,11 +176,11 @@ func TestOnMessageDirectRoute(t *testing.T) {
 	buf := buffer.New(100)
 
 	l := &Listener{
-		token:        "fake",
-		buf:          buf,
-		rtr:          rtr,
-		selfPersonID: "self-id",
-		spaceNames:   map[string]string{"dm-room": "DM Room"},
+		tokenProvider: staticToken("fake"),
+		buf:           buf,
+		rtr:           rtr,
+		selfPersonID:  "self-id",
+		spaceNames:    map[string]string{"dm-room": "DM Room"},
 	}
 
 	l.onMessage(wmh.DecryptedMessage{
