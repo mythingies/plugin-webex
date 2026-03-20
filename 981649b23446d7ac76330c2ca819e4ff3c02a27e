@@ -1,0 +1,51 @@
+internal/server/server.go
+  c41631b1e5a4a8dc 28-29,51
+internal/auth/oauth.go
+  c41631b1e5a4a8dc 1-415
+internal/tools/send_adaptive_card.go
+  c41631b1e5a4a8dc 41-43
+internal/tools/get_mentions.go
+  c41631b1e5a4a8dc 56,63-65
+internal/listener/listener_test.go
+  c41631b1e5a4a8dc 13-17,39,89,120,179
+internal/auth/store.go
+  c41631b1e5a4a8dc 1-75
+cmd/webex-mcp/main.go
+  c41631b1e5a4a8dc 4,9,11,13,17-26,29,41,51-140,142-143
+internal/listener/listener.go
+  c41631b1e5a4a8dc 38,59,61,86-91,246
+internal/tools/send_message.go
+  c41631b1e5a4a8dc 36-38,87-89
+internal/tools/tools.go
+  c41631b1e5a4a8dc 12-20
+internal/buffer/buffer.go
+  c41631b1e5a4a8dc 77-79
+internal/auth/provider.go
+  c41631b1e5a4a8dc 1-24
+internal/auth/protocol.go
+  c41631b1e5a4a8dc 1-192
+internal/auth/auth_test.go
+  c41631b1e5a4a8dc 1-311
+internal/webex/client.go
+  c41631b1e5a4a8dc 19-25,27,32-36,38,46-48,50,129-132,215-219,456-460,496-500
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "981649b23446d7ac76330c2ca819e4ff3c02a27e",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1381,
+      "total_deletions": 191,
+      "accepted_lines": 1213,
+      "overriden_lines": 0
+    }
+  }
+}
