@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -17,16 +16,26 @@ const baseURL = "https://webexapis.com/v1"
 // maxResponseSize limits API response bodies to 50MB to prevent OOM.
 const maxResponseSize = 50 * 1024 * 1024
 
-// Client is a lightweight Webex REST API client using a Personal Access Token.
+// TokenProvider returns a valid Webex access token.
+// Implementations handle static PATs, OAuth with auto-refresh, etc.
+type TokenProvider interface {
+	Token() (string, error)
+}
+
+// Client is a lightweight Webex REST API client.
 type Client struct {
-	token      string
-	httpClient *http.Client
+	tokenProvider TokenProvider
+	httpClient    *http.Client
 }
 
 // NewClient creates a new Webex API client with security-hardened defaults.
-func NewClient(token string) *Client {
+func NewClient(provider TokenProvider) *Client {
+	if provider == nil {
+		panic("webex.NewClient: TokenProvider must not be nil")
+	}
+
 	return &Client{
-		token: strings.TrimSpace(token),
+		tokenProvider: provider,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -34,8 +43,11 @@ func NewClient(token string) *Client {
 					return fmt.Errorf("too many redirects")
 				}
 				// Block redirects to different hosts to prevent token leakage.
-				if len(via) > 0 && via[0].URL.Host != req.URL.Host {
-					return fmt.Errorf("redirect to different host blocked")
+				// Check all hops, not just the first, to catch A→B→A chains.
+				for _, prev := range via {
+					if prev.URL.Host != req.URL.Host {
+						return fmt.Errorf("redirect to different host blocked")
+					}
 				}
 				return nil
 			},
@@ -114,6 +126,10 @@ func (c *Client) GetMessages(roomID string, max int) ([]Message, error) {
 
 // SendMessage sends a message to a space, person, or thread.
 func (c *Client) SendMessage(roomID, toPersonID, toPersonEmail, parentID, text string) (*Message, error) {
+	if roomID == "" && toPersonID == "" && toPersonEmail == "" {
+		return nil, fmt.Errorf("at least one recipient required (roomID, toPersonID, or toPersonEmail)")
+	}
+
 	body := map[string]string{"text": text}
 	if roomID != "" {
 		body["roomId"] = roomID
@@ -196,11 +212,16 @@ func (c *Client) get(path string, params url.Values, out interface{}) error {
 		u += "?" + params.Encode()
 	}
 
+	token, err := c.tokenProvider.Token()
+	if err != nil {
+		return fmt.Errorf("getting access token: %w", err)
+	}
+
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -432,11 +453,16 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 
 	u := baseURL + "/meetingTranscripts/" + url.PathEscape(transcriptID) + "/download?" + params.Encode()
 
+	token, err := c.tokenProvider.Token()
+	if err != nil {
+		return "", fmt.Errorf("getting access token: %w", err)
+	}
+
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -467,11 +493,16 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 		return fmt.Errorf("marshaling body: %w", err)
 	}
 
+	token, err := c.tokenProvider.Token()
+	if err != nil {
+		return fmt.Errorf("getting access token: %w", err)
+	}
+
 	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(jsonBody))
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)

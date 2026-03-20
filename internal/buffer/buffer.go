@@ -74,6 +74,9 @@ func (b *RingBuffer) Drain() []NotificationMessage {
 
 // DrainByPriority removes and returns only messages matching the given priorities, newest first.
 func (b *RingBuffer) DrainByPriority(priorities []string) []NotificationMessage {
+	if len(priorities) > 100 {
+		priorities = priorities[:100]
+	}
 	pset := make(map[string]bool, len(priorities))
 	for _, p := range priorities {
 		pset[p] = true

@@ -35,11 +35,11 @@ type ListenerStatus struct {
 type Listener struct {
 	mu sync.Mutex
 
-	token   string
-	client  *webex.Client
-	buf     *buffer.RingBuffer
-	rtr     *router.Router
-	handler *wmh.WebexMessageHandler
+	tokenProvider webex.TokenProvider
+	client        *webex.Client
+	buf           *buffer.RingBuffer
+	rtr           *router.Router
+	handler       *wmh.WebexMessageHandler
 
 	selfPersonID string
 	spaceNames   map[string]string // roomID → title cache
@@ -56,14 +56,14 @@ type Listener struct {
 }
 
 // New creates a Listener. Call Start() to begin receiving messages.
-func New(token string, client *webex.Client, buf *buffer.RingBuffer, rtr *router.Router) *Listener {
+func New(provider webex.TokenProvider, client *webex.Client, buf *buffer.RingBuffer, rtr *router.Router) *Listener {
 	return &Listener{
-		token:      token,
-		client:     client,
-		buf:        buf,
-		rtr:        rtr,
-		spaceNames: make(map[string]string),
-		rateTokens: rateLimit,
+		tokenProvider: provider,
+		client:        client,
+		buf:           buf,
+		rtr:           rtr,
+		spaceNames:    make(map[string]string),
+		rateTokens:    rateLimit,
 	}
 }
 
@@ -83,9 +83,15 @@ func (l *Listener) Start(ctx context.Context) error {
 	}
 	l.selfPersonID = me.ID
 
+	// Resolve current token for the WebSocket connection.
+	token, err := l.tokenProvider.Token()
+	if err != nil {
+		return fmt.Errorf("getting access token: %w", err)
+	}
+
 	// Use a no-op logger to prevent token leakage from the wmh library.
 	handler, err := wmh.New(wmh.Config{
-		Token:  l.token,
+		Token:  token,
 		Logger: wmh.NewSlogLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	if err != nil {
@@ -237,7 +243,7 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 		PersonID:    msg.PersonID,
 		PersonEmail: msg.PersonEmail,
 		Text:        sanitizedText,
-		HTML:        html.EscapeString(msg.HTML),
+		HTML:        msg.HTML, // Already HTML from Webex API; don't double-escape.
 		Created:     created,
 		Priority:    priority,
 		RoutedAgent: agent,

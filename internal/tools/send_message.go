@@ -33,6 +33,9 @@ func registerSendMessage(s *mcpserver.MCPServer, client *webex.Client) {
 		if err != nil {
 			return mcp.NewToolResultError("text is required"), nil
 		}
+		if len(text) > maxMessageLen {
+			return mcp.NewToolResultError(fmt.Sprintf("message too long (%d chars, max %d)", len(text), maxMessageLen)), nil
+		}
 
 		roomID := req.GetString("room_id", "")
 		toPersonID := req.GetString("to_person_id", "")
@@ -80,6 +83,9 @@ func registerReplyToThread(s *mcpserver.MCPServer, client *webex.Client) {
 		text, err := req.RequireString("text")
 		if err != nil {
 			return mcp.NewToolResultError("text is required"), nil
+		}
+		if len(text) > maxMessageLen {
+			return mcp.NewToolResultError(fmt.Sprintf("reply too long (%d chars, max %d)", len(text), maxMessageLen)), nil
 		}
 
 		msg, err := client.SendMessage(roomID, "", "", parentID, text)

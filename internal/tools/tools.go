@@ -9,6 +9,15 @@ import (
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
+// maxMessageLen is the maximum text length for outbound messages.
+const maxMessageLen = 7439 // Webex API limit
+
+// maxCardJSONLen is the maximum card JSON size.
+const maxCardJSONLen = 28000 // Webex API limit for attachment bodies
+
+// maxMentionsPerMessage caps extracted @mentions to prevent abuse.
+const maxMentionsPerMessage = 50
+
 // clampInt clamps a value between min and max bounds.
 func clampInt(val, min, max int) int {
 	if val < min {
