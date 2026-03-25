@@ -1,0 +1,57 @@
+internal/server/server.go
+  c41631b1e5a4a8dc 4,28,70-73
+install.sh
+  c41631b1e5a4a8dc 55,57-69,130-135,140-151
+install.ps1
+  c41631b1e5a4a8dc 3-4,31-43,45,103-108,117,119-134
+README.md
+  c41631b1e5a4a8dc 11,13,16-41,47,53,59,67,69,72,75-83,85-87,90-96,101,104-111,116,118,120-131,147,172,182,186,194-196,252,261-262,264,269,271-275,277,279
+internal/auth/protocol.go
+  c41631b1e5a4a8dc 87-98,104,108,126,154,160,164,180,193,197
+internal/setup/setup.go
+  c41631b1e5a4a8dc 1-186,189-308
+internal/setup/setup.html
+  c41631b1e5a4a8dc 1-527
+.gitignore
+  c41631b1e5a4a8dc 28,31-33
+Makefile
+  c41631b1e5a4a8dc 6
+skills/webex/SKILL.md
+  c41631b1e5a4a8dc 1-172
+internal/auth/store.go
+  c41631b1e5a4a8dc 60
+.mcp.json.example
+  c41631b1e5a4a8dc 1-11
+cmd/webex-mcp/main.go
+  c41631b1e5a4a8dc 13,27-29,45-46,66-73
+internal/auth/auth_test.go
+  c41631b1e5a4a8dc 190,197,214,219,226,240
+internal/router/config_test.go
+  c41631b1e5a4a8dc 117
+internal/auth/oauth.go
+  c41631b1e5a4a8dc 24,28,201,236,240,246,311,389,391,393
+.golangci.yml
+  c41631b1e5a4a8dc 1-2,10-13,17
+internal/webex/client.go
+  c41631b1e5a4a8dc 230,471,512
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "04af86d11b8f483bb797b77beb18a0da602b6281",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 1719,
+      "total_deletions": 588,
+      "accepted_lines": 1276,
+      "overriden_lines": 2
+    }
+  }
+}
