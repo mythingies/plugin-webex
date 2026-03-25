@@ -84,16 +84,28 @@ func HandleCallbackURL(rawURL string) error {
 }
 
 func registerProtocolWindows(binaryPath string) error {
+	// Create a VBScript wrapper that launches the handler without a visible
+	// console window. This prevents the terminal flash on OAuth callback.
+	vbsDir := filepath.Dir(binaryPath)
+	vbsPath := filepath.Join(vbsDir, "wmcp-callback.vbs")
+	vbs := fmt.Sprintf(
+		"CreateObject(\"WScript.Shell\").Run \"\"\"%s\"\" --oauth-callback \"\"\" & WScript.Arguments(0) & \"\"\"\", 0, False\r\n",
+		binaryPath,
+	)
+	if err := os.WriteFile(vbsPath, []byte(vbs), 0600); err != nil {
+		return fmt.Errorf("writing VBScript wrapper: %w", err)
+	}
+
 	key := `HKCU\Software\Classes\` + ProtocolScheme
 	commands := [][]string{
 		{"reg", "add", key, "/ve", "/d", "URL:Webex MCP Protocol", "/f"},
 		{"reg", "add", key, "/v", "URL Protocol", "/d", "", "/f"},
 		{"reg", "add", key + `\shell\open\command`, "/ve", "/d",
-			fmt.Sprintf(`"%s" --oauth-callback "%%1"`, binaryPath), "/f"},
+			fmt.Sprintf(`wscript.exe "%s" "%%1"`, vbsPath), "/f"},
 	}
 
 	for _, args := range commands {
-		cmd := exec.Command(args[0], args[1:]...)
+		cmd := exec.Command(args[0], args[1:]...) //nolint:gosec // args are constant registry commands
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("registry command failed: %s: %w", strings.TrimSpace(string(out)), err)
 		}
@@ -111,7 +123,7 @@ func registerProtocolDarwin(binaryPath string) error {
 	contentsDir := filepath.Join(appDir, "Contents")
 	macosDir := filepath.Join(contentsDir, "MacOS")
 
-	if err := os.MkdirAll(macosDir, 0755); err != nil {
+	if err := os.MkdirAll(macosDir, 0750); err != nil {
 		return fmt.Errorf("creating app bundle: %w", err)
 	}
 
@@ -139,17 +151,17 @@ func registerProtocolDarwin(binaryPath string) error {
 </dict>
 </plist>`, ProtocolScheme)
 
-	if err := os.WriteFile(filepath.Join(contentsDir, "Info.plist"), []byte(plist), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(contentsDir, "Info.plist"), []byte(plist), 0600); err != nil {
 		return fmt.Errorf("writing Info.plist: %w", err)
 	}
 
 	script := fmt.Sprintf("#!/bin/sh\nexec \"%s\" --oauth-callback \"$@\"\n", binaryPath)
 	handlerPath := filepath.Join(macosDir, "wmcp-handler")
-	if err := os.WriteFile(handlerPath, []byte(script), 0755); err != nil {
+	if err := os.WriteFile(handlerPath, []byte(script), 0750); err != nil { //nolint:gosec // must be executable for macOS app bundle
 		return fmt.Errorf("writing handler script: %w", err)
 	}
 
-	cmd := exec.Command("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+	cmd := exec.Command("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", //nolint:gosec // constant system path
 		"-R", appDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("lsregister failed: %s: %w", strings.TrimSpace(string(out)), err)
@@ -165,7 +177,7 @@ func registerProtocolLinux(binaryPath string) error {
 	}
 
 	desktopDir := filepath.Join(homeDir, ".local", "share", "applications")
-	if err := os.MkdirAll(desktopDir, 0755); err != nil {
+	if err := os.MkdirAll(desktopDir, 0750); err != nil {
 		return fmt.Errorf("creating applications dir: %w", err)
 	}
 
@@ -178,11 +190,11 @@ MimeType=x-scheme-handler/%s;
 `, binaryPath, ProtocolScheme)
 
 	desktopFile := filepath.Join(desktopDir, "wmcp-oauth.desktop")
-	if err := os.WriteFile(desktopFile, []byte(desktop), 0644); err != nil {
+	if err := os.WriteFile(desktopFile, []byte(desktop), 0600); err != nil {
 		return fmt.Errorf("writing desktop file: %w", err)
 	}
 
-	cmd := exec.Command("xdg-mime", "default", "wmcp-oauth.desktop",
+	cmd := exec.Command("xdg-mime", "default", "wmcp-oauth.desktop", //nolint:gosec // constant args
 		fmt.Sprintf("x-scheme-handler/%s", ProtocolScheme))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("xdg-mime failed: %s: %w", strings.TrimSpace(string(out)), err)

@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Webex MCP - Setup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .container {
+    width: 480px;
+    padding: 40px 36px;
+    text-align: center;
+  }
+
+  .logo {
+    width: 100px;
+    height: 100px;
+    margin: 0 auto 16px;
+    background: linear-gradient(135deg, #00bceb 0%, #0076d5 50%, #6b59d3 100%);
+    border-radius: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 48px;
+    color: white;
+    font-weight: bold;
+  }
+
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    color: #999;
+    font-size: 14px;
+    margin-bottom: 28px;
+    line-height: 1.5;
+  }
+
+  .tabs {
+    display: flex;
+    background: #2a2a3e;
+    border-radius: 10px;
+    padding: 4px;
+    margin-bottom: 24px;
+  }
+
+  .tab {
+    flex: 1;
+    padding: 10px 8px;
+    border: none;
+    background: none;
+    color: #888;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s;
+    line-height: 1.3;
+  }
+
+  .tab:hover { color: #ccc; }
+
+  .tab.active {
+    background: #00bceb;
+    color: #fff;
+  }
+
+  .tab .badge {
+    display: block;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+    color: #90ffc0;
+    font-weight: 700;
+  }
+
+  .tab.active .badge { color: #c0ffd0; }
+
+  .panel { display: none; text-align: left; }
+  .panel.active { display: block; }
+
+  .help-link {
+    color: #999;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: block;
+    text-align: center;
+  }
+
+  .help-link a {
+    color: #00bceb;
+    text-decoration: none;
+  }
+
+  .help-link a:hover { text-decoration: underline; }
+
+  .instructions {
+    border: 1px solid #333;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+
+  .instructions summary {
+    padding: 12px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: #00bceb;
+    background: #222238;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .instructions summary::before {
+    content: '\25B8';
+    transition: transform 0.2s;
+  }
+
+  .instructions[open] summary::before {
+    transform: rotate(90deg);
+  }
+
+  .instructions ol {
+    padding: 12px 16px 16px 32px;
+    font-size: 13px;
+    color: #aaa;
+    line-height: 1.7;
+  }
+
+  .instructions code {
+    background: #333;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #ddd;
+  }
+
+  .field {
+    margin-bottom: 14px;
+  }
+
+  .field input {
+    width: 100%;
+    padding: 14px 16px;
+    background: #2a2a3e;
+    border: 1px solid #3a3a4e;
+    border-radius: 8px;
+    color: #e0e0e0;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .field input::placeholder { color: #666; }
+  .field input:focus { border-color: #00bceb; }
+
+  .btn-primary {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .btn-webex {
+    background: linear-gradient(135deg, #00bceb, #0076d5);
+    color: #fff;
+  }
+
+  .btn-webex:hover { opacity: 0.9; }
+  .btn-webex:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-save {
+    background: #4caf50;
+    color: #fff;
+  }
+
+  .btn-save:hover { opacity: 0.9; }
+  .btn-save:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .hint {
+    text-align: center;
+    color: #666;
+    font-size: 12px;
+    font-style: italic;
+    margin-top: 12px;
+  }
+
+  .version {
+    text-align: center;
+    color: #555;
+    font-size: 12px;
+    margin-top: 28px;
+  }
+
+  .status {
+    text-align: center;
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 12px;
+    font-size: 13px;
+    display: none;
+  }
+
+  .status.error {
+    display: block;
+    background: #3e1a1a;
+    color: #ff6b6b;
+    border: 1px solid #5e2a2a;
+  }
+
+  .status.success {
+    display: block;
+    background: #1a3e1a;
+    color: #6bff6b;
+    border: 1px solid #2a5e2a;
+  }
+
+  .status.info {
+    display: block;
+    background: #1a2a3e;
+    color: #6bb8ff;
+    border: 1px solid #2a3a5e;
+  }
+
+  .scopes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+  }
+
+  .scope-tag {
+    background: #333;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #ddd;
+    font-family: monospace;
+  }
+
+  .success-screen {
+    display: none;
+    text-align: center;
+    padding: 40px 0;
+  }
+
+  .success-screen .checkmark {
+    width: 80px;
+    height: 80px;
+    margin: 0 auto 16px;
+    background: #1a3e1a;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    color: #4caf50;
+    border: 2px solid #2a5e2a;
+  }
+
+  .success-screen h2 {
+    color: #4caf50;
+    margin-bottom: 12px;
+  }
+
+  .success-screen p {
+    color: #999;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .success-screen .config-block {
+    background: #2a2a3e;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 20px;
+    text-align: left;
+    font-family: monospace;
+    font-size: 12px;
+    color: #aaa;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div id="setup-form">
+    <div class="logo">W</div>
+    <h1>Webex MCP</h1>
+    <p class="subtitle">Sign in with your Webex account to connect<br>Claude Code to your workspace</p>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('oauth', this)">
+        OAuth<span class="badge">recommended</span>
+      </button>
+      <button class="tab" onclick="switchTab('pat', this)">
+        Manual<br>PAT
+      </button>
+    </div>
+
+    <!-- OAuth Panel -->
+    <div id="panel-oauth" class="panel active">
+      <p class="help-link">
+        Create a Webex Integration at
+        <a href="https://developer.webex.com/my-apps/new/integration" target="_blank">developer.webex.com/my-apps</a>
+      </p>
+
+      <details class="instructions" open>
+        <summary>Setup Instructions</summary>
+        <ol>
+          <li>Click "Create a New App" &gt; "Create an Integration"</li>
+          <li>Choose an app name</li>
+          <li>Set Redirect URI to: <code>wmcp://oauth-callback</code></li>
+          <li>Select scopes:
+            <div class="scopes">
+              <span class="scope-tag">spark:messages_read</span>
+              <span class="scope-tag">spark:messages_write</span>
+              <span class="scope-tag">spark:rooms_read</span>
+              <span class="scope-tag">spark:memberships_read</span>
+              <span class="scope-tag">spark:people_read</span>
+              <span class="scope-tag">spark:kms</span>
+              <span class="scope-tag">meeting:schedules_read</span>
+              <span class="scope-tag">meeting:transcripts_read</span>
+            </div>
+          </li>
+          <li>Copy your Client ID and Client Secret below</li>
+        </ol>
+      </details>
+
+      <div class="field">
+        <input type="text" id="client-id" placeholder="Client ID" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <input type="password" id="client-secret" placeholder="Client Secret" autocomplete="off">
+      </div>
+
+      <button class="btn-primary btn-webex" id="btn-oauth" onclick="submitOAuth()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        Sign in with Webex
+      </button>
+
+      <p class="hint">Clicking "Sign in with Webex" will open your browser for authentication.<br>Tokens auto-refresh — no manual renewal needed.</p>
+    </div>
+
+    <!-- Manual PAT Panel -->
+    <div id="panel-pat" class="panel">
+      <p class="help-link">
+        Generate a Personal Access Token at
+        <a href="https://developer.webex.com/docs/getting-your-personal-access-token" target="_blank">developer.webex.com</a>
+      </p>
+
+      <details class="instructions">
+        <summary>About Personal Access Tokens</summary>
+        <ol>
+          <li>Go to the link above and log in to your Webex account</li>
+          <li>Your token is displayed on the page (valid for 12 hours)</li>
+          <li>Copy and paste it below</li>
+          <li>PATs expire after 12 hours — use OAuth for persistent access</li>
+        </ol>
+      </details>
+
+      <div class="field">
+        <input type="password" id="pat-token" placeholder="Personal Access Token" autocomplete="off" spellcheck="false">
+      </div>
+
+      <button class="btn-primary btn-save" id="btn-pat" onclick="submitPAT()">
+        Save &amp; Connect
+      </button>
+
+      <p class="hint">Token expires after 12 hours. Use OAuth for persistent access.</p>
+    </div>
+
+    <div id="status" class="status"></div>
+  </div>
+
+  <!-- Success screen -->
+  <div id="success-screen" class="success-screen">
+    <div class="checkmark">&#10003;</div>
+    <h2>Connected!</h2>
+    <p id="success-msg">Your Webex integration is configured.</p>
+    <div id="config-preview" class="config-block"></div>
+    <p style="margin-top: 16px; color: #666; font-size: 13px;">
+      You can close this window. The MCP server is ready for Claude Code.
+    </p>
+  </div>
+
+  <p class="version">{{.Version}}</p>
+</div>
+
+<script>
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+  clearStatus();
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status ' + type;
+}
+
+function clearStatus() {
+  const el = document.getElementById('status');
+  el.className = 'status';
+  el.textContent = '';
+}
+
+function showSuccess(msg, config) {
+  document.getElementById('setup-form').style.display = 'none';
+  const screen = document.getElementById('success-screen');
+  screen.style.display = 'block';
+  document.getElementById('success-msg').textContent = msg;
+  if (config) {
+    document.getElementById('config-preview').textContent = config;
+  }
+}
+
+function setButtonLoading(btn, loading) {
+  btn.disabled = loading;
+  if (loading) {
+    btn._origHTML = btn.innerHTML;
+    btn.textContent = 'Authorizing...';
+  } else if (btn._origHTML) {
+    btn.innerHTML = btn._origHTML;
+  }
+}
+
+async function submitOAuth() {
+  const clientId = document.getElementById('client-id').value.trim();
+  const clientSecret = document.getElementById('client-secret').value.trim();
+
+  if (!clientId) { showStatus('Client ID is required', 'error'); return; }
+  if (!clientSecret) { showStatus('Client Secret is required', 'error'); return; }
+
+  const btn = document.getElementById('btn-oauth');
+  setButtonLoading(btn, true);
+  showStatus('Opening browser for Webex authorization...', 'info');
+
+  try {
+    const resp = await fetch('/api/oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret })
+    });
+    const data = await resp.json();
+    if (data.error) {
+      showStatus(data.error, 'error');
+      setButtonLoading(btn, false);
+    } else {
+      const who = data.display_name ? data.display_name + ' (' + data.email + ')' : 'Webex account';
+      showSuccess('Connected as ' + who, data.config);
+    }
+  } catch (e) {
+    showStatus('Connection error: ' + e.message, 'error');
+    setButtonLoading(btn, false);
+  }
+}
+
+async function submitPAT() {
+  const token = document.getElementById('pat-token').value.trim();
+  if (!token) { showStatus('Token is required', 'error'); return; }
+
+  const btn = document.getElementById('btn-pat');
+  btn.disabled = true;
+  btn.textContent = 'Validating...';
+
+  try {
+    const resp = await fetch('/api/pat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token })
+    });
+    const data = await resp.json();
+    if (data.error) {
+      showStatus(data.error, 'error');
+      btn.disabled = false;
+      btn.innerHTML = 'Save &amp; Connect';
+    } else {
+      showSuccess(
+        'Connected as ' + data.display_name + ' (' + data.email + ')',
+        data.config
+      );
+    }
+  } catch (e) {
+    showStatus('Connection error: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = 'Save &amp; Connect';
+  }
+}
+</script>
+
+</body>
+</html>

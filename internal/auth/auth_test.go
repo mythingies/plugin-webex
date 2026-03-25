@@ -187,14 +187,14 @@ func TestHandleCallbackURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallbackFilePath failed: %v", err)
 	}
-	defer os.Remove(origCbPath)
+	defer func() { _ = os.Remove(origCbPath) }()
 
 	err = HandleCallbackURL("wmcp://oauth-callback?code=test-code-123&state=test-state-456")
 	if err != nil {
 		t.Fatalf("HandleCallbackURL failed: %v", err)
 	}
 
-	data, err := os.ReadFile(origCbPath)
+	data, err := os.ReadFile(origCbPath) //nolint:gosec // test file with known path
 	if err != nil {
 		t.Fatalf("reading callback file: %v", err)
 	}
@@ -211,19 +211,19 @@ func TestHandleCallbackURL(t *testing.T) {
 		t.Errorf("expected state test-state-456, got %s", cb.State)
 	}
 
-	os.Remove(origCbPath)
+	_ = os.Remove(origCbPath)
 }
 
 func TestHandleCallbackURLError(t *testing.T) {
 	origCbPath, _ := CallbackFilePath()
-	defer os.Remove(origCbPath)
+	defer func() { _ = os.Remove(origCbPath) }()
 
 	err := HandleCallbackURL("wmcp://oauth-callback?error=access_denied&state=s1")
 	if err != nil {
 		t.Fatalf("HandleCallbackURL failed: %v", err)
 	}
 
-	data, err := os.ReadFile(origCbPath)
+	data, err := os.ReadFile(origCbPath) //nolint:gosec // test file with known path
 	if err != nil {
 		t.Fatalf("reading callback file: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestHandleCallbackURLError(t *testing.T) {
 		t.Errorf("expected error access_denied, got %s", cb.Error)
 	}
 
-	os.Remove(origCbPath)
+	_ = os.Remove(origCbPath)
 }
 
 func TestHandleCallbackURLBadScheme(t *testing.T) {

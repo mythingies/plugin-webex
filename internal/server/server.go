@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"os"
 
@@ -16,7 +17,6 @@ import (
 // Server wraps the MCP server and Webex client.
 type Server struct {
 	mcp      *mcpserver.MCPServer
-	addr     string
 	listener *listener.Listener
 	buffer   *buffer.RingBuffer
 	router   *router.Router
@@ -25,7 +25,7 @@ type Server struct {
 
 // New creates a new MCP server wired to Webex tools.
 // configPath points to .webex-agents.yml; if empty or missing, defaults are used.
-func New(provider webex.TokenProvider, addr, configPath string) (*Server, error) {
+func New(provider webex.TokenProvider, configPath string) (*Server, error) {
 	client := webex.NewClient(provider)
 
 	// Load routing config (optional).
@@ -60,7 +60,6 @@ func New(provider webex.TokenProvider, addr, configPath string) (*Server, error)
 
 	return &Server{
 		mcp:      s,
-		addr:     addr,
 		listener: lst,
 		buffer:   buf,
 		router:   rtr,
@@ -68,10 +67,10 @@ func New(provider webex.TokenProvider, addr, configPath string) (*Server, error)
 	}, nil
 }
 
-// Start begins serving MCP over HTTP.
-func (s *Server) Start() error {
-	httpServer := mcpserver.NewStreamableHTTPServer(s.mcp)
-	return httpServer.Start(s.addr)
+// Start serves MCP over stdin/stdout.
+func (s *Server) Start(ctx context.Context) error {
+	stdio := mcpserver.NewStdioServer(s.mcp)
+	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 
 // MCPServer returns the underlying MCP server for testing.

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "webex": {
+      "command": "go",
+      "args": ["run", "./cmd/webex-mcp/"],
+      "env": {
+        "WEBEX_TOKEN": "<your-webex-personal-access-token>"
+      }
+    }
+  }
+}

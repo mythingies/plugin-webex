@@ -21,11 +21,11 @@ import (
 
 const (
 	authEndpoint  = "https://webexapis.com/v1/authorize"
-	tokenEndpoint = "https://webexapis.com/v1/access_token"
+	tokenEndpoint = "https://webexapis.com/v1/access_token" //nolint:gosec // URL, not a credential
 
 	// DefaultScopes covers the APIs this plugin uses.
 	// Override with WEBEX_SCOPES env var, or use "spark:all" for full access.
-	DefaultScopes = "spark:messages_read spark:messages_write spark:rooms_read spark:memberships_read spark:people_read meeting:schedules_read meeting:transcripts_read meeting:participants_read"
+	DefaultScopes = "spark:messages_read spark:messages_write spark:rooms_read spark:memberships_read spark:people_read spark:kms meeting:schedules_read meeting:transcripts_read"
 
 	// refreshBuffer is how early before expiry we refresh.
 	refreshBuffer = 5 * time.Minute
@@ -198,7 +198,7 @@ func (p *OAuthProvider) Authorize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("resolving callback path: %w", err)
 	}
-	os.Remove(cbPath)
+	_ = os.Remove(cbPath)
 
 	// Build authorization URL.
 	params := url.Values{}
@@ -233,17 +233,17 @@ func (p *OAuthProvider) Authorize(ctx context.Context) error {
 
 			// Verify the file has restrictive permissions (Unix).
 			if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-				os.Remove(cbPath)
+				_ = os.Remove(cbPath)
 				return fmt.Errorf("callback file has insecure permissions (%o); possible tampering", info.Mode().Perm())
 			}
 
-			data, err := os.ReadFile(cbPath)
+			data, err := os.ReadFile(cbPath) //nolint:gosec // path from UserConfigDir, not user input
 			if err != nil {
 				continue
 			}
 
 			// Clean up immediately.
-			os.Remove(cbPath)
+			_ = os.Remove(cbPath)
 
 			var cb callbackData
 			if err := json.Unmarshal(data, &cb); err != nil {
@@ -308,7 +308,7 @@ func (p *OAuthProvider) doTokenRequest(data url.Values) error {
 	if err != nil {
 		return fmt.Errorf("token request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -386,11 +386,11 @@ func isLocalhostURI(uri string) bool {
 func openBrowser(rawURL string) error {
 	switch runtime.GOOS {
 	case "linux":
-		return exec.Command("xdg-open", rawURL).Start()
+		return exec.Command("xdg-open", rawURL).Start() //nolint:gosec // opens validated auth URL in browser
 	case "darwin":
-		return exec.Command("open", rawURL).Start()
+		return exec.Command("open", rawURL).Start() //nolint:gosec // opens validated auth URL in browser
 	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start() //nolint:gosec // opens validated auth URL in browser
 	default:
 		return fmt.Errorf("unsupported platform")
 	}

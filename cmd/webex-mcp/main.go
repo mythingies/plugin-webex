@@ -10,6 +10,7 @@ import (
 
 	"github.com/mythingies/plugin-webex/internal/auth"
 	"github.com/mythingies/plugin-webex/internal/server"
+	"github.com/mythingies/plugin-webex/internal/setup"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -23,28 +24,26 @@ func main() {
 		case "--register-protocol":
 			handleRegisterProtocol()
 			return
+		case "--setup":
+			handleSetup()
+			return
 		}
 	}
 
 	provider := resolveAuth()
-
-	addr := os.Getenv("WEBEX_MCP_ADDR")
-	if addr == "" {
-		addr = ":3119"
-	}
 
 	configPath := os.Getenv("WEBEX_AGENTS_CONFIG")
 	if configPath == "" {
 		configPath = ".webex-agents.yml"
 	}
 
-	srv, err := server.New(provider, addr, configPath)
+	srv, err := server.New(provider, configPath)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "webex-mcp server listening on %s\n", addr)
-	if err := srv.Start(); err != nil {
+	fmt.Fprintln(os.Stderr, "webex-mcp server starting")
+	if err := srv.Start(context.Background()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
@@ -62,6 +61,14 @@ func handleOAuthCallback() {
 	}
 
 	fmt.Fprintln(os.Stderr, "Authorization callback received. You can close this window.")
+}
+
+// handleSetup launches the browser-based setup UI.
+func handleSetup() {
+	exe, _ := os.Executable()
+	if err := setup.Run(exe); err != nil {
+		log.Fatalf("setup error: %v", err)
+	}
 }
 
 // handleRegisterProtocol registers the wmcp:// custom URI scheme with the OS.

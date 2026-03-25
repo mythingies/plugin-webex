@@ -1,3 +1,5 @@
+version: "2"
+
 linters:
   enable:
     - govet
@@ -5,9 +7,13 @@ linters:
     - staticcheck
     - unused
     - ineffassign
+    - gosec
+
+formatters:
+  enable:
     - gofmt
     - goimports
 
-linters-settings:
+formatters-settings:
   goimports:
     local-prefixes: github.com/mythingies/plugin-webex

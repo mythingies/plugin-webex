@@ -52,7 +52,21 @@ resolve_version() {
   echo "$latest"
 }
 
-# --- download & verify -----------------------------------------------------
+# --- install skill only ----------------------------------------------------
+
+install_skill() {
+  need curl
+  local skill_dir="${HOME}/.claude/skills/webex"
+  mkdir -p "$skill_dir"
+  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/skills/webex/SKILL.md" \
+    -o "${skill_dir}/SKILL.md"
+  log "Skill installed to ${skill_dir}/SKILL.md"
+  log ""
+  log "Set your token:  export WEBEX_TOKEN=\"your-token\""
+  log "Then use Claude Code normally — the skill is picked up automatically."
+}
+
+# --- download & verify binary ----------------------------------------------
 
 download_and_install() {
   need curl
@@ -113,8 +127,25 @@ download_and_install() {
       log "  export PATH=\"${INSTALL_DIR}:\$PATH\""
       ;;
   esac
+
+  log ""
+  log "Next: run the setup wizard in your project directory:"
+  log ""
+  log "  cd your-project"
+  log "  ${BINARY} --setup"
 }
 
 # --- main ------------------------------------------------------------------
 
-download_and_install
+log "plugin-webex installer"
+log ""
+log "  1) MCP server  — full feature set (WebSocket, agent routing, priority inbox)"
+log "  2) Skill only   — lightweight, curl-based, no binary needed"
+log ""
+printf "Choose [1/2] (default: 1): "
+read -r choice
+
+case "${choice:-1}" in
+  2) install_skill ;;
+  *) download_and_install ;;
+esac

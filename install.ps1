@@ -1,6 +1,7 @@
 # plugin-webex installer for Windows
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$SkillOnly
 )
 
 $Repo = "mythingies/plugin-webex"
@@ -27,7 +28,21 @@ function Get-Arch {
     }
 }
 
-# --- main ------------------------------------------------------------------
+# --- install skill only ----------------------------------------------------
+
+function Install-Skill {
+    $skillDir = Join-Path $env:USERPROFILE ".claude\skills\webex"
+    New-Item -ItemType Directory -Path $skillDir -Force | Out-Null
+    $skillUrl = "https://raw.githubusercontent.com/$Repo/main/skills/webex/SKILL.md"
+    Invoke-WebRequest -Uri $skillUrl -OutFile (Join-Path $skillDir "SKILL.md") -UseBasicParsing
+    Write-Host ""
+    Write-Host "Skill installed to $skillDir\SKILL.md"
+    Write-Host ""
+    Write-Host 'Set your token:  $env:WEBEX_TOKEN = "your-token"'
+    Write-Host "Then use Claude Code normally - the skill is picked up automatically."
+}
+
+# --- install MCP binary ----------------------------------------------------
 
 function Install-WebexMcp {
     $arch = Get-Arch
@@ -85,6 +100,12 @@ function Install-WebexMcp {
             Write-Host "Added $installDir to your user PATH."
             Write-Host "Restart your terminal for PATH changes to take effect."
         }
+
+        Write-Host ""
+        Write-Host "Next: run the setup wizard in your project directory:"
+        Write-Host ""
+        Write-Host "  cd your-project"
+        Write-Host "  $Binary --setup"
     }
     finally {
         if (Test-Path $tmpDir) {
@@ -93,4 +114,21 @@ function Install-WebexMcp {
     }
 }
 
-Install-WebexMcp
+# --- main ------------------------------------------------------------------
+
+if ($SkillOnly) {
+    Install-Skill
+}
+else {
+    Write-Host "plugin-webex installer"
+    Write-Host ""
+    Write-Host "  1) MCP server  - full feature set (WebSocket, agent routing, priority inbox)"
+    Write-Host "  2) Skill only  - lightweight, curl-based, no binary needed"
+    Write-Host ""
+    $choice = Read-Host "Choose [1/2] (default: 1)"
+
+    switch ($choice) {
+        "2" { Install-Skill }
+        default { Install-WebexMcp }
+    }
+}

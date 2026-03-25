@@ -227,7 +227,7 @@ func (c *Client) get(path string, params url.Values, out interface{}) error {
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, err := readLimitedBody(resp.Body)
@@ -468,7 +468,7 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, err := readLimitedBody(resp.Body)
@@ -509,7 +509,7 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		respBody, err := readLimitedBody(resp.Body)

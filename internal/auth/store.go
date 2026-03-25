@@ -57,7 +57,7 @@ func (s *TokenStore) Load() (*StoredTokens, error) {
 
 // Save writes tokens to disk with restricted permissions.
 func (s *TokenStore) Save(tokens *StoredTokens) error {
-	data, err := json.MarshalIndent(tokens, "", "  ")
+	data, err := json.MarshalIndent(tokens, "", "  ") //nolint:gosec // token storage is the purpose of this function
 	if err != nil {
 		return fmt.Errorf("marshaling tokens: %w", err)
 	}

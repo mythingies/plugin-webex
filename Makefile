@@ -3,13 +3,10 @@ BUILD_DIR := bin
 CMD_DIR := cmd/webex-mcp
 GOLANGCI_LINT := golangci-lint
 
-.PHONY: build run test lint fmt clean
+.PHONY: build test lint fmt clean
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./$(CMD_DIR)/
-
-run: build
-	WEBEX_TOKEN=$${WEBEX_TOKEN} ./$(BUILD_DIR)/$(BINARY_NAME)
 
 test:
 ifdef T

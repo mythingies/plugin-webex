@@ -8,27 +8,55 @@ Cisco Webex integration for Claude Code — read messages, send replies, monitor
 
 - A Webex Personal Access Token ([generate one here](https://developer.webex.com/docs/getting-your-personal-access-token))
 
-### Install
+### Option A: Skill (no build required)
 
-#### curl (Linux / macOS)
+Copy the skill into your Claude Code skills directory. Only needs `curl`, `jq`, and `WEBEX_TOKEN`.
+
+```bash
+# Linux / macOS
+mkdir -p ~/.claude/skills/webex
+curl -fsSL https://raw.githubusercontent.com/mythingies/plugin-webex/main/skills/webex/SKILL.md \
+  -o ~/.claude/skills/webex/SKILL.md
+
+# Windows (PowerShell)
+New-Item -ItemType Directory -Path "$env:USERPROFILE\.claude\skills\webex" -Force
+irm https://raw.githubusercontent.com/mythingies/plugin-webex/main/skills/webex/SKILL.md |
+  Set-Content "$env:USERPROFILE\.claude\skills\webex\SKILL.md"
+```
+
+Set your token:
+
+```bash
+export WEBEX_TOKEN="your-personal-access-token"
+```
+
+That's it — Claude Code picks up the skill automatically.
+
+### Option B: MCP Server (full feature set)
+
+The MCP server adds real-time WebSocket listener, notification buffer, agent routing, and priority inbox on top of the REST API.
+
+#### Install
+
+**curl (Linux / macOS)**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mythingies/plugin-webex/main/install.sh | sh
 ```
 
-#### PowerShell (Windows)
+**PowerShell (Windows)**
 
 ```powershell
 irm https://raw.githubusercontent.com/mythingies/plugin-webex/main/install.ps1 | iex
 ```
 
-#### Go
+**Go**
 
 ```bash
 go install github.com/mythingies/plugin-webex/cmd/webex-mcp@latest
 ```
 
-#### From Source
+**From Source**
 
 ```bash
 git clone https://github.com/mythingies/plugin-webex.git
@@ -36,36 +64,75 @@ cd plugin-webex
 make build
 ```
 
-### Configure
+#### Configure
 
-Set your Webex token:
+Run the setup wizard:
 
 ```bash
-export WEBEX_TOKEN="your-personal-access-token"
+webex-mcp --setup
 ```
 
-Add the MCP server to your Claude Code config (`.mcp.json`):
+This opens a browser-based setup UI where you can choose:
+- **OAuth** (recommended) — persistent tokens that auto-refresh
+- **Manual PAT** — quick start with a 12-hour personal access token
 
+The wizard validates your credentials, writes `.mcp.json`, and registers the `wmcp://` protocol handler automatically.
+
+Claude Code launches the server over stdio when it detects the `.mcp.json` config.
+
+#### Manual Configuration
+
+Alternatively, create `.mcp.json` manually (or copy `.mcp.json.example`):
+
+**Personal Access Token:**
 ```json
 {
-  "webex": {
-    "type": "http",
-    "url": "http://localhost:3119"
+  "mcpServers": {
+    "webex": {
+      "command": "webex-mcp",
+      "env": {
+        "WEBEX_TOKEN": "your-personal-access-token"
+      }
+    }
   }
 }
 ```
 
-### Run
-
-```bash
-make run
+**OAuth Integration** (auto-refreshing tokens):
+```json
+{
+  "mcpServers": {
+    "webex": {
+      "command": "webex-mcp",
+      "env": {
+        "WEBEX_CLIENT_ID": "your-client-id",
+        "WEBEX_CLIENT_SECRET": "your-client-secret"
+      }
+    }
+  }
+}
 ```
 
-The server starts on `localhost:3119` by default. Claude Code connects automatically via the MCP config.
+For OAuth, create an integration at [developer.webex.com/my-apps](https://developer.webex.com/my-apps/new/integration) with redirect URI `wmcp://oauth-callback` and scopes: `spark:messages_read`, `spark:messages_write`, `spark:rooms_read`, `spark:memberships_read`, `spark:people_read`, `spark:kms`, `meeting:schedules_read`, `meeting:transcripts_read`.
+
+## Skill vs MCP
+
+| | Skill | MCP Server |
+|---|---|---|
+| **Setup** | Copy one file + set `WEBEX_TOKEN` | Install binary + `.mcp.json` |
+| **Dependencies** | `curl`, `jq` | None (single binary) |
+| **REST API** | All endpoints | All endpoints |
+| **WebSocket listener** | No | Yes |
+| **Notification buffer** | No | Yes (in-memory ring buffer) |
+| **Agent routing** | No | Yes (`.webex-agents.yml`) |
+| **Priority inbox** | No | Yes |
+| **OAuth / auto-refresh** | No | Yes |
+| **Adaptive Cards** | Yes | Yes |
+| **Meetings / transcripts** | Yes | Yes |
 
 ## Features
 
-### Core Tools (Slack Parity)
+### Core Tools
 
 | Tool | Description |
 |---|---|
@@ -75,10 +142,9 @@ The server starts on `localhost:3119` by default. Claude Code connects automatic
 | `reply_to_thread` | Reply to a specific message thread |
 | `get_users` | List members of a space |
 | `get_user_profile` | Look up a person's details |
-| `add_reaction` | React to a message |
-| `search_messages` | Cross-space full-text search with filters |
+| `search_messages` | Cross-space full-text search |
 
-### Beyond Slack
+### Advanced (MCP only)
 
 | Tool | Description |
 |---|---|
@@ -86,7 +152,6 @@ The server starts on `localhost:3119` by default. Claude Code connects automatic
 | `get_priority_inbox` | Filter buffered messages by priority level |
 | `get_mentions` | Peek at @mentions with surrounding context |
 | `send_adaptive_card` | Rich cards with tables, buttons, and inputs |
-| `share_file` | Upload and share files to spaces |
 | `get_space_analytics` | Message volume, active members, peak times |
 | `listener_control` | Start/stop/status of WebSocket listener |
 | `get_notification_routes` | Show agent routing configuration |
@@ -104,7 +169,7 @@ The server starts on `localhost:3119` by default. Claude Code connects automatic
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│  webex-mcp server (local HTTP MCP server)                     │
+│  webex-mcp server (stdio)                                     │
 │                                                               │
 │  ┌──────────────┐     ┌────────────────────────────────────┐ │
 │  │ REST proxy    │     │ WebSocket listener (toggleable)    │ │
@@ -114,14 +179,11 @@ The server starts on `localhost:3119` by default. Claude Code connects automatic
 │  │ calls only    │     │ → priority classification          │ │
 │  └──────────────┘     └────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
-         ↕ HTTP (MCP)                    ↕ WebSocket (Mercury)
+         ↕ stdio (MCP)                    ↕ WebSocket (Mercury)
       Claude Code                      Webex Cloud
 ```
 
-**Two modes, one binary:**
-
-- **REST mode** (always on): Stateless proxy. Claude calls MCP tools → Webex REST API.
-- **WebSocket mode** (toggleable via `listener_control`): Real-time inbound messages via Mercury WebSocket. Messages are buffered in memory and routed to agents.
+Claude Code launches the server process and communicates over stdin/stdout using the MCP protocol.
 
 ## Configuration
 
@@ -129,8 +191,9 @@ The server starts on `localhost:3119` by default. Claude Code connects automatic
 
 | Variable | Default | Description |
 |---|---|---|
-| `WEBEX_TOKEN` | *(required)* | Webex Personal Access Token |
-| `WEBEX_MCP_ADDR` | `:3119` | Address for the MCP HTTP server |
+| `WEBEX_TOKEN` | — | Webex Personal Access Token |
+| `WEBEX_CLIENT_ID` | — | OAuth Client ID (alternative to PAT) |
+| `WEBEX_CLIENT_SECRET` | — | OAuth Client Secret |
 | `WEBEX_AGENTS_CONFIG` | `.webex-agents.yml` | Path to agent routing config |
 
 ### Agent Routing
@@ -168,67 +231,10 @@ settings:
   priority_levels: [critical, high, medium, low]
 ```
 
-**Match fields:**
-
-- `space` — Space name (exact match or `*` for all). Supports glob prefix matching (e.g. `"Ops*"`).
-- `keywords` — List of keywords to match in message text.
-- `direct` — Match direct (1:1) messages.
-
-**Route fields:**
-
-- `agent` — Agent name. Agent definitions live in `agents/*.md`.
-- `priority` — `critical`, `high`, `medium`, or `low`.
-- `auto_respond` — If `true`, Claude drafts a reply automatically.
-- `action` — Optional action (e.g. `notify_dm` to send a DM notification).
-
-## Deployment
-
-### Releasing a New Version
-
-This project follows [Semantic Versioning](https://semver.org/). Releases are automated via GitHub Actions.
-
-1. **Update CHANGELOG.md** with the new version entry
-2. **Tag the release** and push:
-
-```bash
-git tag v0.6.0
-git push origin main --tags
-```
-
-3. The **Release** workflow automatically:
-   - Cross-compiles binaries for linux/darwin/windows (amd64 + arm64)
-   - Packages them as `.tar.gz` (linux/darwin) and `.zip` (windows)
-   - Generates `checksums.txt` (SHA256)
-   - Creates a GitHub Release with all assets
-
-### Version Scheme
-
-| Bump | When | Example |
-|---|---|---|
-| **Patch** (`0.5.x`) | Bug fixes, docs | `v0.5.0` -> `v0.5.1` |
-| **Minor** (`0.x.0`) | New features, backward-compatible | `v0.5.0` -> `v0.6.0` |
-| **Major** (`x.0.0`) | Breaking changes | `v0.5.0` -> `v1.0.0` |
-
-### CI/CD Pipelines
-
-| Workflow | Trigger | Purpose |
-|---|---|---|
-| **Build** | Push/PR to `main` | Compile verification |
-| **Lint** | Push/PR to `main` | golangci-lint static analysis |
-| **Test** | Push/PR to `main` | Unit tests with race detection + coverage |
-| **Release** | Tag `v*` | Cross-platform build, package, and publish |
-
-## Security
-
-- **Token handling**: `WEBEX_TOKEN` is read from the environment at startup and passed in-memory to the HTTP client. It is never logged, written to disk, or exposed through MCP tool responses.
-- **Local only**: The MCP server binds to `localhost` by default. No external network exposure.
-- **HTTPS**: For production use, place the server behind a reverse proxy with TLS termination.
-
 ## Development
 
 ```bash
 make build          # Build binary to ./bin/webex-mcp
-make run            # Build and run MCP server
 make test           # Run all tests
 make test T=Name    # Run a single test
 make lint           # Run golangci-lint
@@ -243,6 +249,7 @@ plugin-webex/
 ├── cmd/webex-mcp/       # Binary entry point
 ├── internal/
 │   ├── server/          # MCP server setup + tool registration
+│   ├── auth/            # PAT + OAuth (PKCE) authentication
 │   ├── webex/           # Webex REST API client
 │   ├── listener/        # WebSocket listener (Mercury)
 │   ├── buffer/          # Ring buffer for notifications
@@ -250,20 +257,27 @@ plugin-webex/
 │   └── tools/           # MCP tool implementations
 ├── commands/            # /webex slash command
 ├── agents/              # Agent definition files (*.md)
-├── skills/              # Auto-check notification skill
+├── skills/
+│   ├── webex/           # Standalone skill (curl-based, no MCP)
+│   └── webex-monitor/   # Auto-check notification skill
 ├── .claude-plugin/      # Plugin manifest
+├── .mcp.json.example    # MCP config template
 ├── .webex-agents.yml    # Agent routing config
 └── Makefile
 ```
 
-### Contributing
+## Security
+
+- **Token handling**: Tokens are passed via environment variables and held in-memory only. Never logged or written to disk (except encrypted OAuth token store at `~/.config/webex-mcp/tokens.json` with 0600 permissions).
+- **OAuth PKCE**: Authorization code flow with S256 code challenge. No client secret exposed to the browser.
+- **Custom URI scheme**: `wmcp://` callback uses file-based IPC — no localhost HTTP server needed.
+- **Redirect validation**: All redirect hops are checked against the original host to prevent token leakage.
+- **Input limits**: Message text capped at 7,439 chars, card JSON at 28,000 bytes, callback params at 4,096 bytes.
+
+## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Contributors
-
-See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
-
 ## License
 
-[MIT](LICENSE) - Copyright (c) 2026 mythingies
+[MIT](LICENSE)

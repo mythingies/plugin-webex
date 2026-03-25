@@ -1,6 +1,0 @@
-{
-  "webex": {
-    "type": "http",
-    "url": "http://localhost:3119"
-  }
-}

@@ -25,7 +25,11 @@ Thumbs.db
 
 # Environment
 .env
+.env.*
 .env.local
+
+# MCP config (contains tokens)
+.mcp.json
 
 # Build
 dist/
