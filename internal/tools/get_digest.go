@@ -107,7 +107,7 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 					if len(preview) > 120 {
 						preview = preview[:120] + "..."
 					}
-					d.Highlights = append(d.Highlights, fmt.Sprintf("**%s**: %s", msg.PersonEmail, preview))
+					d.Highlights = append(d.Highlights, fmt.Sprintf("**%s**: %s", msg.PersonEmail, sandboxText(preview)))
 				}
 			}
 

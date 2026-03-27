@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Prompt injection sandboxing: all external Webex message content wrapped in `<external-message>` tags so the LLM treats it as data, not instructions
+
 ### Changed
 - Updated all GitHub Actions to latest versions (checkout v6, setup-go v6, upload-artifact v7, download-artifact v8, golangci-lint-action v9)
 - Upgraded golangci-lint from v1.64.8 to v2.11.4 (matching v2 config format)

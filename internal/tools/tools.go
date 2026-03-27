@@ -18,6 +18,13 @@ const maxCardJSONLen = 28000 // Webex API limit for attachment bodies
 // maxMentionsPerMessage caps extracted @mentions to prevent abuse.
 const maxMentionsPerMessage = 50
 
+// sandboxText wraps external message content so the LLM treats it as data,
+// not as instructions. This is a defence-in-depth measure against prompt
+// injection via Webex messages.
+func sandboxText(text string) string {
+	return "<external-message>" + text + "</external-message>"
+}
+
 // clampInt clamps a value between min and max bounds.
 func clampInt(val, min, max int) int {
 	if val < min {

@@ -41,7 +41,7 @@ func registerGetSpaceHistory(s *mcpserver.MCPServer, client *webex.Client) {
 			if msg.ParentID != "" {
 				thread = fmt.Sprintf(" [thread: %s]", msg.ParentID)
 			}
-			text += fmt.Sprintf("- **%s** (%s)%s: %s\n", msg.PersonEmail, msg.Created, thread, msg.Text)
+			text += fmt.Sprintf("- **%s** (%s)%s: %s\n", msg.PersonEmail, msg.Created, thread, sandboxText(msg.Text))
 		}
 		if text == "" {
 			text = "No messages found in this space."

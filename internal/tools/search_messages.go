@@ -87,7 +87,7 @@ func searchSpace(client *webex.Client, roomID, queryLower string, maxMessages in
 	var matches []string
 	for _, msg := range messages {
 		if strings.Contains(strings.ToLower(msg.Text), queryLower) {
-			matches = append(matches, fmt.Sprintf("**%s** (%s): %s", msg.PersonEmail, msg.Created, msg.Text))
+			matches = append(matches, fmt.Sprintf("**%s** (%s): %s", msg.PersonEmail, msg.Created, sandboxText(msg.Text)))
 		}
 	}
 	return matches, nil

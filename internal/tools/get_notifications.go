@@ -24,7 +24,7 @@ func registerGetNotifications(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 		text := fmt.Sprintf("%d notification(s):\n\n", len(messages))
 		for _, msg := range messages {
 			text += fmt.Sprintf("- [%s] **%s** in **%s** (%s, agent: %s): %s\n",
-				msg.Priority, msg.PersonEmail, msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, msg.Text)
+				msg.Priority, msg.PersonEmail, msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, sandboxText(msg.Text))
 		}
 		return mcp.NewToolResultText(text), nil
 	})
