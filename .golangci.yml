@@ -13,7 +13,6 @@ formatters:
   enable:
     - gofmt
     - goimports
-
-formatters-settings:
-  goimports:
-    local-prefixes: github.com/mythingies/plugin-webex
+  settings:
+    goimports:
+      local-prefixes: github.com/mythingies/plugin-webex
