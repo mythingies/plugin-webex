@@ -1,0 +1,31 @@
+CHANGELOG.md
+  c41631b1e5a4a8dc 8-19
+.github/workflows/test.yml
+  c41631b1e5a4a8dc 16,18,26
+.github/workflows/lint.yml
+  c41631b1e5a4a8dc 16,18,23,25
+.github/workflows/build.yml
+  c41631b1e5a4a8dc 16,18
+.github/workflows/release.yml
+  c41631b1e5a4a8dc 19,21,32,46,49-51,58,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.21",
+  "base_commit_sha": "cad1d14e9b1bb11c329452e4d0ae693599ec4f38",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 30,
+      "total_deletions": 24,
+      "accepted_lines": 30,
+      "overriden_lines": 0
+    }
+  }
+}
