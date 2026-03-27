@@ -40,6 +40,7 @@ func Run(binaryPath string) error {
 		}
 	})
 
+	mux.HandleFunc("/api/detect", handleDetect)
 	mux.HandleFunc("/api/pat", handlePAT)
 	mux.HandleFunc("/api/oauth", handleOAuth(binaryPath))
 
@@ -60,6 +61,35 @@ func Run(binaryPath string) error {
 		WriteTimeout: 300 * time.Second,
 	}
 	return srv.Serve(ln)
+}
+
+type detectResponse struct {
+	Mode     string `json:"mode"`                // "oauth", "pat", or ""
+	ClientID string `json:"client_id,omitempty"` // masked
+	Message  string `json:"message,omitempty"`
+}
+
+func handleDetect(w http.ResponseWriter, r *http.Request) {
+	clientID := strings.TrimSpace(os.Getenv("WEBEX_CLIENT_ID"))
+	clientSecret := strings.TrimSpace(os.Getenv("WEBEX_CLIENT_SECRET"))
+	token := strings.TrimSpace(os.Getenv("WEBEX_TOKEN"))
+
+	switch {
+	case clientID != "" && clientSecret != "":
+		masked := clientID[:4] + "..." + clientID[len(clientID)-4:]
+		writeJSON(w, detectResponse{
+			Mode:     "oauth",
+			ClientID: masked,
+			Message:  "OAuth credentials loaded from environment",
+		})
+	case token != "":
+		writeJSON(w, detectResponse{
+			Mode:    "pat",
+			Message: "Personal Access Token loaded from environment",
+		})
+	default:
+		writeJSON(w, detectResponse{})
+	}
 }
 
 type patRequest struct {

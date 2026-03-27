@@ -490,6 +490,20 @@ async function submitOAuth() {
   }
 }
 
+async function detectEnv() {
+  try {
+    const resp = await fetch('/api/detect');
+    const data = await resp.json();
+    if (data.mode === 'oauth') {
+      showStatus(data.message + ' (' + data.client_id + ')', 'success');
+    } else if (data.mode === 'pat') {
+      switchTab('pat', document.querySelectorAll('.tab')[1]);
+      showStatus(data.message, 'success');
+    }
+  } catch (e) { /* ignore */ }
+}
+detectEnv();
+
 async function submitPAT() {
   const token = document.getElementById('pat-token').value.trim();
   if (!token) { showStatus('Token is required', 'error'); return; }
