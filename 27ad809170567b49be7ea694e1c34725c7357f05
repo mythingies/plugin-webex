@@ -1,0 +1,39 @@
+internal/tools/get_mentions.go
+  c41631b1e5a4a8dc 38
+internal/tools/get_cross_space_context.go
+  c41631b1e5a4a8dc 103,105,107
+internal/tools/tools.go
+  c41631b1e5a4a8dc 21-27
+internal/tools/get_notifications.go
+  c41631b1e5a4a8dc 27
+internal/tools/get_space_history.go
+  c41631b1e5a4a8dc 44
+internal/tools/search_messages.go
+  c41631b1e5a4a8dc 90
+CHANGELOG.md
+  c41631b1e5a4a8dc 10-12
+internal/tools/get_digest.go
+  c41631b1e5a4a8dc 110
+internal/tools/get_priority_inbox.go
+  c41631b1e5a4a8dc 48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.21",
+  "base_commit_sha": "27ad809170567b49be7ea694e1c34725c7357f05",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 19,
+      "total_deletions": 9,
+      "accepted_lines": 19,
+      "overriden_lines": 0
+    }
+  }
+}
