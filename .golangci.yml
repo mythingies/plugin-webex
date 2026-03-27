@@ -15,4 +15,5 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/mythingies/plugin-webex
+      local-prefixes:
+        - github.com/mythingies/plugin-webex
