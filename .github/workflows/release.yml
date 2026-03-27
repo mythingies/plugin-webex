@@ -16,9 +16,9 @@ jobs:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version: "1.26"
 
@@ -29,7 +29,7 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          go build -o "webex-mcp${ext}" ./cmd/webex-mcp/
+          go build -trimpath -ldflags="-s -w" -o "webex-mcp${ext}" ./cmd/webex-mcp/
 
       - name: Package
         env:
@@ -43,27 +43,22 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: webex-mcp-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: webex-mcp-*.tar.gz
-          if-no-files-found: ignore
-
-      - name: Upload artifact (zip)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: webex-mcp-${{ matrix.goos }}-${{ matrix.goarch }}-zip
-          path: webex-mcp-*.zip
+          path: |
+            webex-mcp-*.tar.gz
+            webex-mcp-*.zip
           if-no-files-found: ignore
 
   publish:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true

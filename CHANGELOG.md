@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Updated all GitHub Actions to latest versions (checkout v6, setup-go v6, upload-artifact v7, download-artifact v8, golangci-lint-action v9)
+- Upgraded golangci-lint from v1.64.8 to v2.11.4 (matching v2 config format)
+- Added `-trimpath -ldflags="-s -w"` to release builds for smaller, reproducible binaries
+- Removed duplicate artifact upload steps in release workflow
+
+### Fixed
+- CI lint failures caused by golangci-lint v1 not understanding v2 config format
+- Deprecated Node.js 16/20 warnings in GitHub Actions
+
 ## [0.5.0] - 2026-03-03
 
 ### Added
