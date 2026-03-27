@@ -1,0 +1,25 @@
+internal/setup/setup.go
+  c41631b1e5a4a8dc 43,66-94
+internal/setup/setup.html
+  c41631b1e5a4a8dc 493-506
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.21",
+  "base_commit_sha": "48ea60f1ac86de0587f21bae7e6baed2b6da33a9",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 44,
+      "total_deletions": 0,
+      "accepted_lines": 44,
+      "overriden_lines": 0
+    }
+  }
+}
