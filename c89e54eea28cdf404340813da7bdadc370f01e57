@@ -1,0 +1,31 @@
+.github/workflows/codeql.yml
+  c41631b1e5a4a8dc 1-38
+.github/workflows/dependency-review.yml
+  c41631b1e5a4a8dc 1-20
+SECURITY.md
+  c41631b1e5a4a8dc 1-27
+CHANGELOG.md
+  c41631b1e5a4a8dc 12-17
+.github/dependabot.yml
+  c41631b1e5a4a8dc 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "c89e54eea28cdf404340813da7bdadc370f01e57",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland",
+      "messages": [],
+      "total_additions": 110,
+      "total_deletions": 0,
+      "accepted_lines": 110,
+      "overriden_lines": 0
+    }
+  }
+}
