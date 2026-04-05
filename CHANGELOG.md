@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Prompt injection sandboxing: all external Webex message content wrapped in `<external-message>` tags so the LLM treats it as data, not instructions
+- CodeQL security scanning workflow (Go, security-and-quality queries, weekly schedule)
+- Dependency review workflow for PRs (blocks moderate+ vulnerabilities, GPL/AGPL licenses)
+- Dependabot configuration for Go modules and GitHub Actions (weekly updates)
+- SECURITY.md with vulnerability reporting policy and security measures summary
+- GitHub secret scanning and push protection enabled
+- Dependabot vulnerability alerts and automated security fixes enabled
 
 ### Changed
 - Updated all GitHub Actions to latest versions (checkout v6, setup-go v6, upload-artifact v7, download-artifact v8, golangci-lint-action v9)
