@@ -11,6 +11,7 @@ import (
 	"github.com/mythingies/plugin-webex/internal/auth"
 	"github.com/mythingies/plugin-webex/internal/server"
 	"github.com/mythingies/plugin-webex/internal/setup"
+	"github.com/mythingies/plugin-webex/internal/tools"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -122,11 +123,12 @@ func resolveAuth() webex.TokenProvider {
 }
 
 func resolveOAuth(clientID, clientSecret string) webex.TokenProvider {
+	scopes := os.Getenv("WEBEX_SCOPES")
 	cfg := auth.OAuthConfig{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURI:  os.Getenv("WEBEX_REDIRECT_URI"),
-		Scopes:       os.Getenv("WEBEX_SCOPES"),
+		Scopes:       scopes,
 	}
 
 	provider, err := auth.NewOAuthProvider(cfg)
@@ -145,6 +147,17 @@ func resolveOAuth(clientID, clientSecret string) webex.TokenProvider {
 		fmt.Fprintln(os.Stderr, "auth: authorization successful")
 	} else {
 		fmt.Fprintln(os.Stderr, "auth: using stored OAuth tokens")
+	}
+
+	// Validate that configured scopes cover tool requirements.
+	effectiveScopes := scopes
+	if effectiveScopes == "" {
+		effectiveScopes = auth.DefaultScopes
+	}
+	if warnings := tools.ValidateScopes(effectiveScopes); len(warnings) > 0 {
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "scope warning: %s\n", w)
+		}
 	}
 
 	return provider

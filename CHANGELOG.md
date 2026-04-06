@@ -15,16 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SECURITY.md with vulnerability reporting policy and security measures summary
 - GitHub secret scanning and push protection enabled
 - Dependabot vulnerability alerts and automated security fixes enabled
+- MAESTRO threat model (THREAT_MODEL.md) — full 7-layer analysis with ASI threat taxonomy
+- PII redaction: email addresses masked in all tool outputs (`al***@example.com`)
+- Structured audit logging via `slog` for all write/drain tool operations
+- Per-tool rate limiting (2s cooldown) on buffer drain operations
+- Buffer overflow alerting: `slog.Warn` at capacity and 95% utilization
+- Per-agent buffer isolation: `DrainByAgent` and `PeekByAgent` methods
+- Output validation: outbound messages stripped of `javascript:`, `data:`, `wmcp://` URLs
+- Adaptive Card body sanitization: recursive text field sanitization against prompt injection
+- Per-tool OAuth scope declarations with startup scope validation
+- Windows NTFS ACL enforcement for token storage via `icacls` (platform-specific)
+- CycloneDX SBOM generation in release workflow
+- Webex API redirect path allowlisting (`/v1/` prefix only)
 
 ### Changed
 - Updated all GitHub Actions to latest versions (checkout v6, setup-go v6, upload-artifact v7, download-artifact v8, golangci-lint-action v9)
 - Upgraded golangci-lint from v1.64.8 to v2.11.4 (matching v2 config format)
 - Added `-trimpath -ldflags="-s -w"` to release builds for smaller, reproducible binaries
 - Removed duplicate artifact upload steps in release workflow
+- Config validation hardened: agent name character allowlist, priority enum enforcement, keyword bounds
+- OAuth callback uses `fstat` on open file descriptor to prevent TOCTOU race
+
+### Removed
+- `auto_respond` and `action` fields from agent routing config (unimplemented, misleading)
+- `HTML` field from buffer notifications (sandbox gap vector)
 
 ### Fixed
 - CI lint failures caused by golangci-lint v1 not understanding v2 config format
 - Deprecated Node.js 16/20 warnings in GitHub Actions
+- Digest truncation ordering: `sandboxText()` now applied before truncation to prevent tag breakage
 
 ## [0.5.0] - 2026-03-03
 

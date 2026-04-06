@@ -16,13 +16,11 @@ func testConfig() *Config {
 				Match:    MatchCondition{Keywords: []string{"outage", "incident", "P1"}, Space: "*"},
 				Agent:    "escalation",
 				Priority: "critical",
-				Action:   "notify_dm",
 			},
 			{
-				Match:       MatchCondition{Direct: true},
-				Agent:       "dm-responder",
-				Priority:    "high",
-				AutoRespond: true,
+				Match:    MatchCondition{Direct: true},
+				Agent:    "dm-responder",
+				Priority: "high",
 			},
 			{
 				Match:    MatchCondition{Space: "Ops*"},
@@ -106,9 +104,6 @@ func TestRouteDirect(t *testing.T) {
 	}
 	if result.Agent != "dm-responder" {
 		t.Errorf("expected agent dm-responder, got %s", result.Agent)
-	}
-	if !result.AutoRespond {
-		t.Error("expected auto_respond true")
 	}
 }
 

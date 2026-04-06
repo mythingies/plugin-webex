@@ -160,10 +160,9 @@ func TestOnMessageDirectRoute(t *testing.T) {
 	cfg := &router.Config{
 		Routes: []router.Route{
 			{
-				Match:       router.MatchCondition{Direct: true},
-				Agent:       "dm-responder",
-				Priority:    "high",
-				AutoRespond: true,
+				Match:    router.MatchCondition{Direct: true},
+				Agent:    "dm-responder",
+				Priority: "high",
 			},
 			{
 				Match:    router.MatchCondition{Space: "*"},

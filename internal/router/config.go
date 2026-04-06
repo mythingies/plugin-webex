@@ -18,13 +18,11 @@ type Config struct {
 	Settings SettingsConfig `yaml:"settings"`
 }
 
-// Route maps a match condition to an agent with priority and behavior.
+// Route maps a match condition to an agent with priority.
 type Route struct {
-	Match       MatchCondition `yaml:"match"`
-	Agent       string         `yaml:"agent"`
-	Priority    string         `yaml:"priority"`
-	AutoRespond bool           `yaml:"auto_respond"`
-	Action      string         `yaml:"action,omitempty"`
+	Match    MatchCondition `yaml:"match"`
+	Agent    string         `yaml:"agent"`
+	Priority string         `yaml:"priority"`
 }
 
 // MatchCondition defines how an inbound message is matched to a route.
@@ -81,17 +79,58 @@ func LoadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// ValidateConfig checks that a config is within safe bounds.
+// validAgentName checks that an agent name contains only safe characters.
+var validAgentNameChars = func() map[rune]bool {
+	m := make(map[rune]bool)
+	for _, c := range "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" {
+		m[c] = true
+	}
+	return m
+}()
+
+// ValidateConfig checks that a config is within safe bounds and uses valid values.
 func ValidateConfig(cfg *Config) error {
 	if len(cfg.Routes) > 200 {
 		return fmt.Errorf("too many routes (%d, max 200)", len(cfg.Routes))
 	}
+
+	// Build allowed priority set from settings.
+	allowedPriority := make(map[string]bool, len(cfg.Settings.PriorityLevels))
+	for _, p := range cfg.Settings.PriorityLevels {
+		allowedPriority[p] = true
+	}
+
 	for i, route := range cfg.Routes {
 		if len(route.Match.Keywords) > 50 {
 			return fmt.Errorf("route %d: too many keywords (%d, max 50)", i, len(route.Match.Keywords))
 		}
 		if strings.Count(route.Match.Space, "*") > 5 {
 			return fmt.Errorf("route %d: too many wildcards in space pattern", i)
+		}
+
+		// Validate agent name: alphanumeric, dash, underscore only.
+		if route.Agent == "" {
+			return fmt.Errorf("route %d: agent name is required", i)
+		}
+		for _, c := range route.Agent {
+			if !validAgentNameChars[c] {
+				return fmt.Errorf("route %d: invalid character %q in agent name %q (allowed: a-z, 0-9, -, _)", i, c, route.Agent)
+			}
+		}
+
+		// Validate priority against configured levels.
+		if route.Priority != "" && !allowedPriority[route.Priority] {
+			return fmt.Errorf("route %d: invalid priority %q (allowed: %v)", i, route.Priority, cfg.Settings.PriorityLevels)
+		}
+
+		// Validate keyword content: reject control characters.
+		for j, kw := range route.Match.Keywords {
+			if kw == "" {
+				return fmt.Errorf("route %d: keyword %d is empty", i, j)
+			}
+			if len(kw) > 200 {
+				return fmt.Errorf("route %d: keyword %d too long (%d chars, max 200)", i, j, len(kw))
+			}
 		}
 	}
 	return nil

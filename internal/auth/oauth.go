@@ -226,18 +226,27 @@ func (p *OAuthProvider) Authorize(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			info, err := os.Stat(cbPath)
+			// Open the file directly — stat and read from the same fd to avoid
+			// TOCTOU race (file could be swapped between stat and read).
+			f, err := os.Open(cbPath) //nolint:gosec // path from UserConfigDir, not user input
 			if err != nil {
 				continue // file not yet written
 			}
 
-			// Verify the file has restrictive permissions (Unix).
+			// Check permissions on the open fd (not the path) to avoid TOCTOU.
+			info, err := f.Stat()
+			if err != nil {
+				_ = f.Close()
+				continue
+			}
 			if runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+				_ = f.Close()
 				_ = os.Remove(cbPath)
 				return fmt.Errorf("callback file has insecure permissions (%o); possible tampering", info.Mode().Perm())
 			}
 
-			data, err := os.ReadFile(cbPath) //nolint:gosec // path from UserConfigDir, not user input
+			data, err := io.ReadAll(f)
+			_ = f.Close()
 			if err != nil {
 				continue
 			}

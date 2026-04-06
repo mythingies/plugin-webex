@@ -37,15 +37,20 @@ func registerGetPriorityInbox(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 			return mcp.NewToolResultError("at least one priority level is required"), nil
 		}
 
+		if !toolRateAllow("get_priority_inbox") {
+			return mcp.NewToolResultError("rate limited: wait before calling get_priority_inbox again"), nil
+		}
+
 		messages := buf.DrainByPriority(priorities)
 		if len(messages) == 0 {
 			return mcp.NewToolResultText(fmt.Sprintf("No messages with priority %s.", raw)), nil
 		}
 
+		auditLog("get_priority_inbox", "drained", "count", len(messages), "priorities", raw)
 		text := fmt.Sprintf("%d message(s) matching priority [%s]:\n\n", len(messages), raw)
 		for _, msg := range messages {
 			text += fmt.Sprintf("- [%s] **%s** in **%s** (%s, agent: %s): %s\n",
-				msg.Priority, msg.PersonEmail, msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, sandboxText(msg.Text))
+				msg.Priority, maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, sandboxText(msg.Text))
 		}
 		return mcp.NewToolResultText(text), nil
 	})

@@ -103,11 +103,11 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 
 				// Capture first few messages as highlights.
 				if len(d.Highlights) < 5 {
-					preview := msg.Text
-					if len(preview) > 120 {
-						preview = preview[:120] + "..."
+					preview := sandboxText(msg.Text)
+					if len(preview) > 200 {
+						preview = preview[:200] + "...</external-message>"
 					}
-					d.Highlights = append(d.Highlights, fmt.Sprintf("**%s**: %s", msg.PersonEmail, sandboxText(preview)))
+					d.Highlights = append(d.Highlights, fmt.Sprintf("**%s**: %s", maskEmail(msg.PersonEmail), preview))
 				}
 			}
 

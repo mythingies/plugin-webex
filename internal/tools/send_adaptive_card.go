@@ -11,6 +11,26 @@ import (
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
+// sanitizeCardBody strips dangerous content from Adaptive Card text fields.
+func sanitizeCardBody(card map[string]interface{}) {
+	for key, val := range card {
+		switch v := val.(type) {
+		case string:
+			if key == "text" || key == "value" || key == "placeholder" || key == "title" {
+				card[key] = sanitizeOutboundText(v)
+			}
+		case map[string]interface{}:
+			sanitizeCardBody(v)
+		case []interface{}:
+			for _, item := range v {
+				if m, ok := item.(map[string]interface{}); ok {
+					sanitizeCardBody(m)
+				}
+			}
+		}
+	}
+}
+
 func registerSendAdaptiveCard(s *mcpserver.MCPServer, client *webex.Client) {
 	tool := mcp.NewTool("send_adaptive_card",
 		mcp.WithDescription("Send a rich Adaptive Card to a Webex space or person. Cards support tables, buttons, inputs, and other interactive elements."),
@@ -42,16 +62,20 @@ func registerSendAdaptiveCard(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError(fmt.Sprintf("card_json too large (%d bytes, max %d)", len(cardJSON), maxCardJSONLen)), nil
 		}
 
-		var card interface{}
+		var card map[string]interface{}
 		if err := json.Unmarshal([]byte(cardJSON), &card); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("invalid card_json: %v", err)), nil
 		}
+
+		// Sanitize text fields in card body to prevent prompt injection persistence.
+		sanitizeCardBody(card)
 
 		msg, err := client.SendAdaptiveCard(roomID, toPersonEmail, card)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to send adaptive card: %v", err)), nil
 		}
 
+		auditLog("send_adaptive_card", "sent", "msg_id", msg.ID, "room_id", roomID)
 		return mcp.NewToolResultText(fmt.Sprintf("Adaptive Card sent (id: %s, created: %s)", msg.ID, msg.Created)), nil
 	})
 }

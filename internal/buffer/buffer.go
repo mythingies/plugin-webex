@@ -1,6 +1,7 @@
 package buffer
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -14,7 +15,6 @@ type NotificationMessage struct {
 	PersonEmail string    `json:"personEmail"`
 	PersonName  string    `json:"personName"`
 	Text        string    `json:"text"`
-	HTML        string    `json:"html"`
 	Created     time.Time `json:"created"`
 	Priority    string    `json:"priority"`
 	RoutedAgent string    `json:"routedAgent"`
@@ -45,11 +45,66 @@ func (b *RingBuffer) Push(msg NotificationMessage) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if len(b.items) >= b.maxSize {
-		// Drop oldest (index 0).
+	size := len(b.items)
+
+	// Alert on buffer pressure thresholds.
+	if size >= b.maxSize {
+		slog.Warn("buffer overflow: dropping oldest message", "size", size, "max", b.maxSize, "dropped_id", b.items[0].ID)
 		b.items = b.items[1:]
+	} else if pct := size * 100 / b.maxSize; pct >= 95 {
+		slog.Warn("buffer near capacity", "utilization_pct", pct, "size", size, "max", b.maxSize)
 	}
+
 	b.items = append(b.items, msg)
+}
+
+// DrainByAgent removes and returns only messages routed to the given agent, newest first.
+// If agent is empty, all messages are returned (same as Drain).
+func (b *RingBuffer) DrainByAgent(agent string) []NotificationMessage {
+	if agent == "" {
+		return b.Drain()
+	}
+
+	b.mu.Lock()
+	var matched, remaining []NotificationMessage
+	for _, msg := range b.items {
+		if msg.RoutedAgent == agent {
+			matched = append(matched, msg)
+		} else {
+			remaining = append(remaining, msg)
+		}
+	}
+	b.items = remaining
+	b.mu.Unlock()
+
+	for i, j := 0, len(matched)-1; i < j; i, j = i+1, j-1 {
+		matched[i], matched[j] = matched[j], matched[i]
+	}
+	if matched == nil {
+		return []NotificationMessage{}
+	}
+	return matched
+}
+
+// PeekByAgent returns the most recent n messages for a specific agent without removing them.
+func (b *RingBuffer) PeekByAgent(n int, agent string) []NotificationMessage {
+	if agent == "" {
+		return b.Peek(n)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var filtered []NotificationMessage
+	for i := len(b.items) - 1; i >= 0 && len(filtered) < n; i-- {
+		if b.items[i].RoutedAgent == agent {
+			filtered = append(filtered, b.items[i])
+		}
+	}
+	if filtered == nil {
+		return []NotificationMessage{}
+	}
+	return filtered
 }
 
 // Drain removes and returns all messages from the buffer, newest first.

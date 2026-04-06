@@ -8,10 +8,8 @@ import (
 
 // RoutingResult holds the outcome of routing a message.
 type RoutingResult struct {
-	Agent       string
-	Priority    string
-	AutoRespond bool
-	Action      string
+	Agent    string
+	Priority string
 }
 
 // InboundMessage contains the fields needed for route matching.
@@ -45,10 +43,8 @@ func (r *Router) Route(msg InboundMessage) *RoutingResult {
 	for _, route := range r.cfg.Routes {
 		if matchRoute(route.Match, msg) {
 			return &RoutingResult{
-				Agent:       route.Agent,
-				Priority:    route.Priority,
-				AutoRespond: route.AutoRespond,
-				Action:      route.Action,
+				Agent:    route.Agent,
+				Priority: route.Priority,
 			}
 		}
 	}

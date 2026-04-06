@@ -56,12 +56,17 @@ func (s *TokenStore) Load() (*StoredTokens, error) {
 }
 
 // Save writes tokens to disk with restricted permissions.
+// On Windows, NTFS ACLs are explicitly set via icacls because
+// Go's 0600 mode has no effect on NTFS.
 func (s *TokenStore) Save(tokens *StoredTokens) error {
 	data, err := json.MarshalIndent(tokens, "", "  ") //nolint:gosec // token storage is the purpose of this function
 	if err != nil {
 		return fmt.Errorf("marshaling tokens: %w", err)
 	}
-	return os.WriteFile(s.path, data, 0600)
+	if err := os.WriteFile(s.path, data, 0600); err != nil {
+		return err
+	}
+	return restrictFileAccess(s.path)
 }
 
 // Delete removes the stored token file.

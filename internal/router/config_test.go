@@ -18,12 +18,10 @@ routes:
       space: "*"
     agent: escalation
     priority: critical
-    action: notify_dm
   - match:
       direct: true
     agent: dm-responder
     priority: high
-    auto_respond: true
 settings:
   buffer_size: 3000
   check_interval: 30s
@@ -41,12 +39,6 @@ settings:
 
 	if cfg.Routes[0].Agent != "alert-triage" {
 		t.Errorf("expected agent alert-triage, got %s", cfg.Routes[0].Agent)
-	}
-	if cfg.Routes[1].Action != "notify_dm" {
-		t.Errorf("expected action notify_dm, got %s", cfg.Routes[1].Action)
-	}
-	if !cfg.Routes[2].AutoRespond {
-		t.Error("expected auto_respond true for route 3")
 	}
 	if cfg.Routes[2].Match.Direct != true {
 		t.Error("expected direct true for route 3")

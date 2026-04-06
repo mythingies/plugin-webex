@@ -8,8 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
+
+// allowedRedirectPathPrefixes are the Webex API path prefixes allowed in redirects.
+// This prevents a compromised DNS from steering the token to non-API paths.
+var allowedRedirectPathPrefixes = []string{"/v1/"}
 
 const baseURL = "https://webexapis.com/v1"
 
@@ -43,11 +48,21 @@ func NewClient(provider TokenProvider) *Client {
 					return fmt.Errorf("too many redirects")
 				}
 				// Block redirects to different hosts to prevent token leakage.
-				// Check all hops, not just the first, to catch A→B→A chains.
 				for _, prev := range via {
 					if prev.URL.Host != req.URL.Host {
 						return fmt.Errorf("redirect to different host blocked")
 					}
+				}
+				// Block redirects to unexpected paths (e.g., /auth/login via DNS compromise).
+				pathOK := false
+				for _, prefix := range allowedRedirectPathPrefixes {
+					if strings.HasPrefix(req.URL.Path, prefix) {
+						pathOK = true
+						break
+					}
+				}
+				if !pathOK {
+					return fmt.Errorf("redirect to unexpected path blocked: %s", req.URL.Path)
 				}
 				return nil
 			},

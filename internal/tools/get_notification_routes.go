@@ -24,14 +24,7 @@ func registerGetNotificationRoutes(s *mcpserver.MCPServer, rtr *router.Router) {
 
 		text := fmt.Sprintf("%d route(s) configured:\n\n", len(routes))
 		for i, r := range routes {
-			text += fmt.Sprintf("**Route %d** → agent: `%s`, priority: %s", i+1, r.Agent, r.Priority)
-			if r.AutoRespond {
-				text += ", auto-respond: yes"
-			}
-			if r.Action != "" {
-				text += fmt.Sprintf(", action: %s", r.Action)
-			}
-			text += "\n"
+			text += fmt.Sprintf("**Route %d** → agent: `%s`, priority: %s\n", i+1, r.Agent, r.Priority)
 
 			// Show match conditions.
 			var conditions []string

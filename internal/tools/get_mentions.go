@@ -35,7 +35,7 @@ func registerGetMentions(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 					mentionList = extractMentions(msg.Text)
 				}
 				mentions = append(mentions, fmt.Sprintf("- **%s** in **%s** (%s) mentioned [%s]: %s",
-					msg.PersonEmail, msg.RoomTitle, msg.Created.Format("15:04:05"), mentionList, sandboxText(msg.Text)))
+					maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), mentionList, sandboxText(msg.Text)))
 			}
 		}
 

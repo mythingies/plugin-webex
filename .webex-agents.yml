@@ -8,7 +8,6 @@ routes:
       space: "Production Alerts"
     agent: alert-triage
     priority: critical
-    auto_respond: false
 
   # Keyword-based watchdog: escalate outage mentions anywhere
   - match:
@@ -16,28 +15,24 @@ routes:
       space: "*"
     agent: escalation
     priority: critical
-    action: notify_dm
 
   # Direct messages: draft context-aware replies
   - match:
       direct: true
     agent: dm-responder
     priority: high
-    auto_respond: true
 
   # Ops spaces: summarize activity
   - match:
       space: "Ops*"
     agent: ops-summarizer
     priority: medium
-    auto_respond: false
 
   # Everything else
   - match:
       space: "*"
     agent: general
     priority: low
-    auto_respond: false
 
 settings:
   buffer_size: 5000

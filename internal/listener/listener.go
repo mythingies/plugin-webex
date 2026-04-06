@@ -243,7 +243,6 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 		PersonID:    msg.PersonID,
 		PersonEmail: msg.PersonEmail,
 		Text:        sanitizedText,
-		HTML:        msg.HTML, // Already HTML from Webex API; don't double-escape.
 		Created:     created,
 		Priority:    priority,
 		RoutedAgent: agent,

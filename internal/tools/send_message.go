@@ -37,6 +37,9 @@ func registerSendMessage(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError(fmt.Sprintf("message too long (%d chars, max %d)", len(text), maxMessageLen)), nil
 		}
 
+		// Sanitize outbound text: strip dangerous URL protocols.
+		text = sanitizeOutboundText(text)
+
 		roomID := req.GetString("room_id", "")
 		toPersonID := req.GetString("to_person_id", "")
 		toPersonEmail := req.GetString("to_person_email", "")
@@ -50,6 +53,7 @@ func registerSendMessage(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to send message: %v", err)), nil
 		}
 
+		auditLog("send_message", "sent", "msg_id", msg.ID, "room_id", roomID)
 		return mcp.NewToolResultText(fmt.Sprintf("Message sent (id: %s, created: %s)", msg.ID, msg.Created)), nil
 	})
 }
@@ -88,11 +92,15 @@ func registerReplyToThread(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError(fmt.Sprintf("reply too long (%d chars, max %d)", len(text), maxMessageLen)), nil
 		}
 
+		// Sanitize outbound text.
+		text = sanitizeOutboundText(text)
+
 		msg, err := client.SendMessage(roomID, "", "", parentID, text)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to reply: %v", err)), nil
 		}
 
+		auditLog("reply_to_thread", "sent", "msg_id", msg.ID, "room_id", roomID, "parent_id", parentID)
 		return mcp.NewToolResultText(fmt.Sprintf("Reply sent (id: %s, thread: %s)", msg.ID, parentID)), nil
 	})
 }
