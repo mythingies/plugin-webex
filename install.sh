@@ -42,11 +42,12 @@ resolve_version() {
   fi
 
   need curl
+  # Use the redirect from /releases/latest to avoid API rate limits (403).
+  # The redirect URL contains the tag name: .../releases/tag/v1.2.3
   local latest
-  latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | head -1 \
-    | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest" \
+    | sed 's|.*/tag/||')
 
   [ -n "$latest" ] || die "Could not determine latest release"
   echo "$latest"
