@@ -1,0 +1,25 @@
+internal/auth/oauth.go
+  c41631b1e5a4a8dc 28
+README.md
+  c41631b1e5a4a8dc 116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "4ad4c60d59b1615e934de9dc69bf6d2b849cb55c",
+  "prompts": {
+    "c41631b1e5a4a8dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 3,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
