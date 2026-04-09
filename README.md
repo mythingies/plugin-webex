@@ -113,7 +113,7 @@ Alternatively, create `.mcp.json` manually (or copy `.mcp.json.example`):
 }
 ```
 
-For OAuth, create an integration at [developer.webex.com/my-apps](https://developer.webex.com/my-apps/new/integration) with redirect URI `wmcp://oauth-callback` and scopes: `spark:messages_read`, `spark:messages_write`, `spark:rooms_read`, `spark:memberships_read`, `spark:people_read`, `spark:kms`, `meeting:schedules_read`, `meeting:transcripts_read`.
+For OAuth, create an integration at [developer.webex.com/my-apps](https://developer.webex.com/my-apps/new/integration) with redirect URI `wmcp://oauth-callback` and scopes: `spark:messages_read`, `spark:messages_write`, `spark:rooms_read`, `spark:memberships_read`, `spark:people_read`, `meeting:schedules_read`, `meeting:transcripts_read`.
 
 ## Skill vs MCP
 

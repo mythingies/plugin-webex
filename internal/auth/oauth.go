@@ -25,7 +25,7 @@ const (
 
 	// DefaultScopes covers the APIs this plugin uses.
 	// Override with WEBEX_SCOPES env var, or use "spark:all" for full access.
-	DefaultScopes = "spark:messages_read spark:messages_write spark:rooms_read spark:memberships_read spark:people_read spark:kms meeting:schedules_read meeting:transcripts_read"
+	DefaultScopes = "spark:messages_read spark:messages_write spark:rooms_read spark:memberships_read spark:people_read meeting:schedules_read meeting:transcripts_read"
 
 	// refreshBuffer is how early before expiry we refresh.
 	refreshBuffer = 5 * time.Minute
