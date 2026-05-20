@@ -48,10 +48,15 @@ func registerGetPriorityInbox(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 
 		auditLog("get_priority_inbox", "drained", "count", len(messages), "priorities", raw)
 		text := fmt.Sprintf("%d message(s) matching priority [%s]:\n\n", len(messages), raw)
+		agents := make([]string, 0, len(messages))
 		for _, msg := range messages {
 			text += fmt.Sprintf("- [%s] **%s** in **%s** (%s, agent: %s): %s\n",
 				msg.Priority, maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, sandboxText(msg.Text))
+			if msg.RoutedAgent != "" {
+				agents = append(agents, msg.RoutedAgent)
+			}
 		}
+		text += renderPlaybooks(agents)
 		return mcp.NewToolResultText(text), nil
 	})
 }

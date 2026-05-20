@@ -232,7 +232,6 @@ routes:
       direct: true
     agent: dm-responder
     priority: high
-    auto_respond: true
 
   - match:
       space: "*"
@@ -244,6 +243,40 @@ settings:
   check_interval: 15s
   priority_levels: [critical, high, medium, low]
 ```
+
+### Per-agent playbooks
+
+When `get_notifications`, `get_priority_inbox`, or `get_mentions` returns
+messages, each one carries its routed agent name. The MCP server inlines
+`agents/<agent-name>.md` (relative to the working directory) into the tool
+result so Claude has the right playbook in-context for every drained message.
+
+For example, if `agents/alert-triage.md` contains your triage runbook and a
+message routes to `alert-triage`, the tool result looks like:
+
+```
+2 notification(s):
+
+- [critical] **al***@example.com** in **Production Alerts** ... agent: alert-triage): <external-message>...</external-message>
+- [high] **bo***@example.com** in **DMs** ... agent: dm-responder): <external-message>...</external-message>
+
+## Agent playbooks
+
+### alert-triage
+<contents of agents/alert-triage.md>
+
+### dm-responder
+<contents of agents/dm-responder.md>
+```
+
+Notes:
+- Each playbook is capped at 4 KB to keep tool results reasonable.
+- Agent names are validated (`a-z 0-9 - _`) and resolved relative to the
+  working directory; path traversal is rejected.
+- Missing playbooks are silently skipped — the routing config and the
+  `agents/` files are independent.
+- Multiple rooms can route to the same agent without duplicating playbook
+  content.
 
 ## Development
 

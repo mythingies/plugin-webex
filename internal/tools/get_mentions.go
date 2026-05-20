@@ -28,6 +28,7 @@ func registerGetMentions(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 		}
 
 		var mentions []string
+		var agents []string
 		for _, msg := range messages {
 			if len(msg.Mentions) > 0 || containsMention(msg.Text) {
 				mentionList := strings.Join(msg.Mentions, ", ")
@@ -36,6 +37,9 @@ func registerGetMentions(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 				}
 				mentions = append(mentions, fmt.Sprintf("- **%s** in **%s** (%s) mentioned [%s]: %s",
 					maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), mentionList, sandboxText(msg.Text)))
+				if msg.RoutedAgent != "" {
+					agents = append(agents, msg.RoutedAgent)
+				}
 			}
 		}
 
@@ -44,6 +48,7 @@ func registerGetMentions(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 		}
 
 		text := fmt.Sprintf("%d mention(s) found:\n\n%s\n", len(mentions), strings.Join(mentions, "\n"))
+		text += renderPlaybooks(agents)
 		return mcp.NewToolResultText(text), nil
 	})
 }
