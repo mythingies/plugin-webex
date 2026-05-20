@@ -1,0 +1,27 @@
+internal/auth/store.go
+  s_c41631b1e5a4a8::t_6ab0f618132189 69
+CHANGELOG.md
+  s_c41631b1e5a4a8::t_ceb71da4cc839c 10-11,13,17-18
+internal/auth/store_acl_windows.go
+  s_c41631b1e5a4a8::t_33c052b01e187f 11,14-15
+internal/auth/store_acl_other.go
+  s_c41631b1e5a4a8::t_51cf43fe0076cd 5,7
+internal/setup/setup.go
+  s_c41631b1e5a4a8::t_f85d0c63d074dc 297-301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "007870f33f9f0da35072ead18cfb04e928647cf7",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>"
+    }
+  }
+}
