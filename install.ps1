@@ -11,11 +11,22 @@ $Binary = "webex-mcp"
 # --- resolve version -------------------------------------------------------
 
 function Resolve-LatestVersion {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing
-    if (-not $release.tag_name) {
+    # Use the redirect from /releases/latest to avoid API rate limits (403).
+    # The redirect URL contains the tag name: .../releases/tag/v1.2.3
+    $req = [System.Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+    $req.AllowAutoRedirect = $false
+    $req.Method = "HEAD"
+    try {
+        $resp = $req.GetResponse()
+        $location = $resp.Headers["Location"]
+        $resp.Close()
+    } catch [System.Net.WebException] {
+        $location = $_.Exception.Response.Headers["Location"]
+    }
+    if (-not $location) {
         throw "Could not determine latest release"
     }
-    return $release.tag_name
+    return ($location -split "/tag/")[-1]
 }
 
 # --- detect architecture ---------------------------------------------------

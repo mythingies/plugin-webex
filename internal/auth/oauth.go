@@ -326,7 +326,24 @@ func (p *OAuthProvider) doTokenRequest(data url.Values) error {
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Debug("token endpoint error", "status", resp.StatusCode, "body_size", len(body))
-		return fmt.Errorf("token endpoint returned status %d", resp.StatusCode)
+		// Surface the Webex error message so users can diagnose scope mismatches,
+		// invalid client credentials, expired auth codes, etc.
+		var errResp struct {
+			Error            string `json:"error"`
+			ErrorDescription string `json:"error_description"`
+			Message          string `json:"message"`
+		}
+		_ = json.Unmarshal(body, &errResp)
+		switch {
+		case errResp.ErrorDescription != "":
+			return fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.ErrorDescription)
+		case errResp.Message != "":
+			return fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.Message)
+		case errResp.Error != "":
+			return fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.Error)
+		default:
+			return fmt.Errorf("OAuth token exchange failed (status %d)", resp.StatusCode)
+		}
 	}
 
 	var tokenResp struct {
