@@ -1,0 +1,31 @@
+internal/tools/playbooks.go
+  s_c41631b1e5a4a8::t_ba812fd926d8ea 1-117
+internal/tools/get_notifications.go
+  s_c41631b1e5a4a8::t_bef34af71037d4 30,34-36,38
+README.md
+  s_c41631b1e5a4a8::t_450e1a29943871 247-279
+internal/tools/get_priority_inbox.go
+  s_c41631b1e5a4a8::t_269bab3ac89c55 51,55-57,59
+CHANGELOG.md
+  s_c41631b1e5a4a8::t_023c544fabed70 11
+internal/tools/get_mentions.go
+  s_c41631b1e5a4a8::t_47ab642e16a5f6 31,40-42,51
+internal/tools/playbooks_test.go
+  s_c41631b1e5a4a8::t_607abcd046a5ce 1-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "ceb5996faac0b10e859681af4adb6bc6475ac71f",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>"
+    }
+  }
+}
