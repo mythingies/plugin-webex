@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-20
+
 ### Added
 - Inline per-agent playbooks: `get_notifications`, `get_priority_inbox`, and `get_mentions` append `agents/<routed-agent>.md` to tool results so Claude has the right playbook in-context for every drained message (4 KB cap per playbook, path-traversal-safe)
 - Prompt injection sandboxing: all external Webex message content wrapped in `<external-message>` tags so the LLM treats it as data, not instructions
