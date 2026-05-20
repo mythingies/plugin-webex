@@ -1,0 +1,21 @@
+CHANGELOG.md
+  s_c41631b1e5a4a8::t_8ffcfabf730c81 10-13
+go.mod
+  s_c41631b1e5a4a8::t_5b3bb406139647 13-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "5662e7e8c7b58bb962d257a5471200004823365c",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>"
+    }
+  }
+}
