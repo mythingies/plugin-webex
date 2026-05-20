@@ -66,7 +66,7 @@ func (s *TokenStore) Save(tokens *StoredTokens) error {
 	if err := os.WriteFile(s.path, data, 0600); err != nil {
 		return err
 	}
-	return restrictFileAccess(s.path)
+	return RestrictFileAccess(s.path)
 }
 
 // Delete removes the stored token file.

@@ -8,11 +8,11 @@ import (
 	"os/user"
 )
 
-// restrictFileAccess sets restrictive NTFS ACLs on the token file.
+// RestrictFileAccess sets restrictive NTFS ACLs on a sensitive file.
 // Go's os.WriteFile 0600 mode has no effect on Windows NTFS, so we
 // call icacls to remove inherited permissions and grant access only
-// to the current user.
-func restrictFileAccess(path string) error {
+// to the current user. Use for any file containing secrets.
+func RestrictFileAccess(path string) error {
 	u, err := user.Current()
 	if err != nil {
 		return fmt.Errorf("getting current user: %w", err)

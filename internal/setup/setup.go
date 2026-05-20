@@ -294,6 +294,11 @@ func writeMCPConfig(mode, token, clientID, clientSecret string) (string, error) 
 	if err := os.WriteFile(".mcp.json", data, 0600); err != nil {
 		return "", err
 	}
+	// On Windows, 0600 has no effect — strip inherited ACEs so other
+	// users on the machine can't read the embedded client_secret.
+	if err := auth.RestrictFileAccess(".mcp.json"); err != nil {
+		return "", fmt.Errorf("locking .mcp.json ACL: %w", err)
+	}
 
 	// Display version with masked secrets.
 	displayEnv := map[string]string{}

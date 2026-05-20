@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-20
+
 ### Security
+- Setup wizard now hardens `.mcp.json` ACL on Windows after writing. Previously, `os.WriteFile` with mode `0600` had no effect on NTFS, so the file inherited parent-directory ACEs allowing `BUILTIN\Users` and `Authenticated Users` to read the embedded `WEBEX_CLIENT_SECRET`. Setup now invokes `icacls /inheritance:r /grant:r <user>:F` after writing, restricting access to the current user only. Existing installs should re-run `webex-mcp setup` or manually run `icacls .mcp.json /inheritance:r /grant:r %USERNAME%:F` to harden their on-disk file.
 - Bump `github.com/buger/jsonparser` v1.1.1 → v1.1.2 (CVE-2026-32285, GHSA-6g7g-w4f8-9c9x — DoS via `Delete` on malformed JSON; transitive via mcp-go → invopop/jsonschema → wk8/go-ordered-map)
 - Bump `github.com/go-jose/go-jose/v4` v4.1.3 → v4.1.4 (CVE-2026-34986, GHSA-78h2-9frx-2jm8 — JWE decryption panic on empty `encrypted_key`; transitive via webex-message-handler)
+
+### Changed
+- Exported `auth.RestrictFileAccess` so the setup package can apply the same NTFS ACL hardening as token storage
 
 ## [0.7.0] - 2026-05-20
 
