@@ -1,0 +1,25 @@
+internal/setup/setup.html
+  s_c41631b1e5a4a8::t_fe33a21b8baa2c 445-464
+  s_c41631b1e5a4a8::t_35e3d970d1d74f 269-283
+  s_c41631b1e5a4a8::t_3a4168ba68cee1 360-361,370
+internal/auth/oauth.go
+  s_c41631b1e5a4a8::t_4b6c3f20130887 329-346
+install.ps1
+  s_c41631b1e5a4a8::t_cef31bd705d4e2 14-26,29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "aa7d27b203895f6212d53d81996e3c08d28d76e9",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>"
+    }
+  }
+}
