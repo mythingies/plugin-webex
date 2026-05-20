@@ -2,6 +2,20 @@
 
 Cisco Webex integration for Claude Code — read messages, send replies, monitor spaces in real-time, route inbound messages to agents, and automate workflows.
 
+> **Heads up:** Cisco now ships an official Webex MCP server on the [Webex Agentic Platform](https://developer.webex.com/mcp/docs/webex-agentic-mcp-servers). For basic use (send/read messages, list spaces, meeting transcripts), that is the simplest path — no local binary, no setup wizard, native HTTPS transport.
+>
+> **Use the official Webex MCP if** you want quick request/response access to Webex from Claude Code and don't need real-time push or local routing.
+>
+> **Use plugin-webex if** you need any of the following, which Webex MCP does not currently provide:
+> - **Real-time inbound** via WebSocket (Mercury) with a local ring buffer — agents can drain messages that arrived while idle
+> - **Agent routing** with `.webex-agents.yml` — classify inbound messages by space/keywords/DM, assign priorities, isolate per-agent
+> - **Priority inbox** and **@mention filtering** on the local buffer
+> - **Aggregation tools** like `get_digest` (per-space activity summary) and `get_cross_space_context` (search-with-context across all your spaces)
+> - **Local-only operation** with PAT (no WCIT, no integration registration, no traffic through Cisco's MCP infra)
+> - **Skill-only mode** — pure curl wrapper, no binary, useful for sandboxed environments
+>
+> The two can also coexist — register both and Claude Code uses whichever tool fits the request.
+
 ## Quick Start
 
 ### Prerequisites
