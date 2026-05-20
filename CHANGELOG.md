@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Bump `github.com/buger/jsonparser` v1.1.1 → v1.1.2 (CVE-2026-32285, GHSA-6g7g-w4f8-9c9x — DoS via `Delete` on malformed JSON; transitive via mcp-go → invopop/jsonschema → wk8/go-ordered-map)
+- Bump `github.com/go-jose/go-jose/v4` v4.1.3 → v4.1.4 (CVE-2026-34986, GHSA-78h2-9frx-2jm8 — JWE decryption panic on empty `encrypted_key`; transitive via webex-message-handler)
+
 ## [0.7.0] - 2026-05-20
 
 ### Added
