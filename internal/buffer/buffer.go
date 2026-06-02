@@ -159,6 +159,36 @@ func (b *RingBuffer) DrainByPriority(priorities []string) []NotificationMessage 
 	return matched
 }
 
+// PeekByPriority returns the most recent messages matching the given
+// priorities without removing them, newest first. If priorities is empty,
+// returns nothing. n caps the number scanned from newest backwards.
+func (b *RingBuffer) PeekByPriority(n int, priorities []string) []NotificationMessage {
+	if len(priorities) > 100 {
+		priorities = priorities[:100]
+	}
+	pset := make(map[string]bool, len(priorities))
+	for _, p := range priorities {
+		pset[p] = true
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if n <= 0 {
+		n = len(b.items)
+	}
+	var out []NotificationMessage
+	for i := len(b.items) - 1; i >= 0 && len(out) < n; i-- {
+		if pset[b.items[i].Priority] {
+			out = append(out, b.items[i])
+		}
+	}
+	if out == nil {
+		return []NotificationMessage{}
+	}
+	return out
+}
+
 // Peek returns the most recent n messages without removing them, newest first.
 func (b *RingBuffer) Peek(n int) []NotificationMessage {
 	b.mu.Lock()

@@ -12,6 +12,7 @@ import (
 	"github.com/mythingies/plugin-webex/internal/buffer"
 	"github.com/mythingies/plugin-webex/internal/listener"
 	"github.com/mythingies/plugin-webex/internal/router"
+	"github.com/mythingies/plugin-webex/internal/triage"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -153,7 +154,7 @@ func ValidateScopes(configuredScopes string) []string {
 }
 
 // Register adds all MCP tools to the server.
-func Register(s *mcpserver.MCPServer, client *webex.Client, buf *buffer.RingBuffer, rtr *router.Router, lst *listener.Listener) {
+func Register(s *mcpserver.MCPServer, client *webex.Client, buf *buffer.RingBuffer, rtr *router.Router, lst *listener.Listener, tri *triage.Store) {
 	// v0.1 — core tools (Slack parity).
 	registerListSpaces(s, client)
 	registerGetSpaceHistory(s, client)
@@ -178,4 +179,11 @@ func Register(s *mcpserver.MCPServer, client *webex.Client, buf *buffer.RingBuff
 	registerGetMeetingTranscript(s, client)
 	registerGetDigest(s, client)
 	registerGetCrossSpaceContext(s, client)
+
+	// v0.9 — durable triage ("still to process" reminders). Only registered
+	// when a triage store is available.
+	if tri != nil {
+		registerGetPending(s, tri)
+		registerMarkProcessed(s, tri)
+	}
 }

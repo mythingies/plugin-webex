@@ -13,6 +13,7 @@ import (
 
 	"github.com/mythingies/plugin-webex/internal/buffer"
 	"github.com/mythingies/plugin-webex/internal/router"
+	"github.com/mythingies/plugin-webex/internal/triage"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -39,6 +40,7 @@ type Listener struct {
 	client        *webex.Client
 	buf           *buffer.RingBuffer
 	rtr           *router.Router
+	triage        *triage.Store
 	handler       *wmh.WebexMessageHandler
 
 	selfPersonID string
@@ -65,6 +67,15 @@ func New(provider webex.TokenProvider, client *webex.Client, buf *buffer.RingBuf
 		spaceNames:    make(map[string]string),
 		rateTokens:    rateLimit,
 	}
+}
+
+// SetTriageStore attaches a durable triage store. When set, each inbound
+// message is recorded as PENDING so it survives as a "still to process"
+// reminder independent of the in-memory ring buffer. Optional and nil-safe.
+func (l *Listener) SetTriageStore(t *triage.Store) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.triage = t
 }
 
 // Start connects to the Webex Mercury WebSocket and begins routing messages.
@@ -249,6 +260,27 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 	}
 
 	l.buf.Push(notif)
+
+	// Record a durable "still to process" reminder. Add is idempotent and
+	// never resets an already-processed item, so re-delivery can't resurrect
+	// a cleared reminder.
+	l.mu.Lock()
+	t := l.triage
+	l.mu.Unlock()
+	if t != nil {
+		if err := t.Add(triage.Item{
+			ID:          notif.ID,
+			RoomID:      notif.RoomID,
+			RoomTitle:   notif.RoomTitle,
+			PersonEmail: notif.PersonEmail,
+			Text:        notif.Text,
+			Created:     notif.Created,
+			Priority:    notif.Priority,
+			RoutedAgent: notif.RoutedAgent,
+		}); err != nil {
+			slog.Warn("failed to record triage item", "error", err, "id", notif.ID)
+		}
+	}
 
 	l.mu.Lock()
 	l.received++

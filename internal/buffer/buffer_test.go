@@ -119,6 +119,40 @@ func TestDrainByPriorityMultiple(t *testing.T) {
 	}
 }
 
+func TestPeekByPriority(t *testing.T) {
+	b := New(10)
+	b.Push(msg("1", "low"))
+	b.Push(msg("2", "critical"))
+	b.Push(msg("3", "high"))
+	b.Push(msg("4", "critical"))
+
+	matched := b.PeekByPriority(0, []string{"critical"})
+	if len(matched) != 2 {
+		t.Fatalf("expected 2 critical, got %d", len(matched))
+	}
+	if matched[0].ID != "4" {
+		t.Errorf("expected newest critical id=4, got %s", matched[0].ID)
+	}
+
+	// Non-destructive: nothing removed.
+	if b.Size() != 4 {
+		t.Errorf("PeekByPriority removed messages: size=%d, want 4", b.Size())
+	}
+
+	// n cap is honored.
+	if got := b.PeekByPriority(1, []string{"critical"}); len(got) != 1 {
+		t.Errorf("n cap not honored: got %d, want 1", len(got))
+	}
+
+	// No match yields empty, still non-destructive.
+	if got := b.PeekByPriority(0, []string{"nope"}); len(got) != 0 {
+		t.Errorf("expected 0 for unmatched priority, got %d", len(got))
+	}
+	if b.Size() != 4 {
+		t.Errorf("size changed after no-match peek: %d", b.Size())
+	}
+}
+
 func TestPeek(t *testing.T) {
 	b := New(10)
 	b.Push(msg("1", "low"))

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-02
+
+### Added
+- **Durable triage list** (`internal/triage`) — a local, persistent "still to process" reminder for inbound messages. Survives restarts (0600 JSON at `~/.config/webex-mcp/pending.json`, atomic temp-file+rename writes, Windows ACL via `auth.RestrictFileAccess`). Reading never changes an item's status; items stay `pending` until explicitly cleared.
+- `get_pending` MCP tool — lists messages still to process (newest-first). Reading it never clears anything.
+- `mark_processed` MCP tool — the only way an item leaves the pending list. Local only: never sends anything to Webex or other users; never fires automatically, on read, or on reply.
+- `buffer.PeekByPriority` — non-destructive priority-filtered read.
+
+### Changed
+- `get_notifications` and `get_priority_inbox` are now **non-destructive peeks** — they no longer drain the buffer, so reading inbound messages can't silently discard them. `get_notifications` gains an optional `max` parameter.
+- Inbound messages are now recorded in the durable triage list (in addition to the in-memory ring buffer) when the WebSocket listener is active.
+
+### Notes
+- This release deliberately does **not** send Webex read receipts. The plugin never touches Webex's native unread/read state — "processed" is a private, local reminder only, so a sender never sees a false "read" signal and the user never loses an unread reminder by reading a message through the plugin. (Outward read-receipt support via the internal Conversation API was investigated and declined; see prior discussion / `webex-message-handler` #23.)
+
 ## [0.8.0] - 2026-06-02
 
 ### Security

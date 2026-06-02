@@ -75,9 +75,11 @@ OAuth access/refresh tokens **and** the OAuth client secret live in the OS keych
 ### Beyond Slack (v0.2+)
 | Tool | Description |
 |---|---|
-| `get_notifications` | Drain inbound message buffer |
-| `get_priority_inbox` | Classified/prioritized inbound messages |
+| `get_notifications` | Peek inbound message buffer (non-destructive) |
+| `get_priority_inbox` | Classified/prioritized inbound messages (non-destructive peek) |
 | `get_mentions` | All @mentions with context |
+| `get_pending` | List messages still to process (durable, restart-surviving reminder) |
+| `mark_processed` | Clear handled items from the pending list (local only) |
 | `send_adaptive_card` | Rich formatted cards (tables, buttons, inputs) |
 | `share_file` | Upload/share files to spaces |
 | `get_space_analytics` | Message volume, active members, peak times |
@@ -127,7 +129,7 @@ Agent definitions live in `agents/*.md` — markdown files with instructions Cla
 plugin-webex/
 ├── .claude-plugin/
 │   └── plugin.json              # Plugin manifest
-├── .mcp.json                    # MCP server config (HTTP, localhost)
+├── .mcp.json                    # MCP server config (stdio; WEBEX_CLIENT_ID + binary path)
 ├── commands/
 │   └── webex.md                 # /webex slash command
 ├── agents/
@@ -147,7 +149,8 @@ plugin-webex/
 │   ├── server/                  # MCP server setup + tool registration
 │   ├── webex/                   # Webex REST API client
 │   ├── listener/                # WebSocket listener (webex-message-handler)
-│   ├── buffer/                  # Ring buffer for notifications
+│   ├── buffer/                  # In-memory ring buffer for live notifications
+│   ├── triage/                  # Durable "still to process" reminder store (pending.json)
 │   ├── router/                  # Agent routing engine
 │   └── tools/                   # MCP tool implementations
 ├── .webex-agents.yml            # Agent routing config (user-editable)

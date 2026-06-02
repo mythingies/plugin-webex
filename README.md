@@ -165,9 +165,11 @@ For OAuth, create an integration at [developer.webex.com/my-apps](https://develo
 
 | Tool | Description |
 |---|---|
-| `get_notifications` | Drain inbound message buffer (newest-first) |
-| `get_priority_inbox` | Filter buffered messages by priority level |
+| `get_notifications` | Peek at inbound message buffer, newest-first (non-destructive) |
+| `get_priority_inbox` | Filter buffered messages by priority level (non-destructive) |
 | `get_mentions` | Peek at @mentions with surrounding context |
+| `get_pending` | List messages still to process — a durable reminder that survives restarts |
+| `mark_processed` | Clear handled items from the pending list (local only; never signals senders) |
 | `send_adaptive_card` | Rich cards with tables, buttons, and inputs |
 | `get_space_analytics` | Message volume, active members, peak times |
 | `listener_control` | Start/stop/status of WebSocket listener |
@@ -181,6 +183,25 @@ For OAuth, create an integration at [developer.webex.com/my-apps](https://develo
 | `get_meeting_transcript` | Pull transcript from a past meeting |
 | `get_digest` | Activity digest for spaces over a time range |
 | `get_cross_space_context` | Search a topic across all spaces, correlate results |
+
+## Pending reminders (triage)
+
+When the WebSocket listener is active, every inbound message is recorded in a
+durable "still to process" list. This is a **private, local reminder** — it
+never touches Webex's unread/read state and never signals anything to the
+sender.
+
+The workflow it supports:
+
+1. A message arrives → it's added as **pending**.
+2. `get_pending` (or `get_notifications` / `get_priority_inbox`) lets you **peek
+   at what's being asked** as often as you like — reading never clears it.
+3. When you've actually handled the item, call `mark_processed` to remove it.
+
+Because reading never clears a reminder, you don't lose track of what's
+outstanding just by opening a message — and because "processed" is local-only,
+a sender never sees a "read" they'd mistake for "seen and ignored." The list
+persists across restarts at `~/.config/webex-mcp/pending.json` (0600).
 
 ## Architecture
 

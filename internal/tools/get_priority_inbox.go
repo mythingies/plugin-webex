@@ -13,7 +13,7 @@ import (
 
 func registerGetPriorityInbox(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 	tool := mcp.NewTool("get_priority_inbox",
-		mcp.WithDescription("Drain buffered messages filtered by priority level. Returns matching messages newest-first and removes them from the buffer. Non-matching messages remain buffered."),
+		mcp.WithDescription("Peek at buffered messages filtered by priority level. Returns matching messages newest-first WITHOUT removing them — reading does not consume the buffer or clear any reminder. Use mark_processed to clear items from your pending list."),
 		mcp.WithString("priorities",
 			mcp.Required(),
 			mcp.Description("Comma-separated priority levels to retrieve (e.g., \"critical,high\")."),
@@ -41,12 +41,12 @@ func registerGetPriorityInbox(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 			return mcp.NewToolResultError("rate limited: wait before calling get_priority_inbox again"), nil
 		}
 
-		messages := buf.DrainByPriority(priorities)
+		messages := buf.PeekByPriority(0, priorities)
 		if len(messages) == 0 {
 			return mcp.NewToolResultText(fmt.Sprintf("No messages with priority %s.", raw)), nil
 		}
 
-		auditLog("get_priority_inbox", "drained", "count", len(messages), "priorities", raw)
+		auditLog("get_priority_inbox", "peeked", "count", len(messages), "priorities", raw)
 		text := fmt.Sprintf("%d message(s) matching priority [%s]:\n\n", len(messages), raw)
 		agents := make([]string, 0, len(messages))
 		for _, msg := range messages {

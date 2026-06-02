@@ -11,6 +11,7 @@ import (
 	"github.com/mythingies/plugin-webex/internal/listener"
 	"github.com/mythingies/plugin-webex/internal/router"
 	"github.com/mythingies/plugin-webex/internal/tools"
+	"github.com/mythingies/plugin-webex/internal/triage"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -21,6 +22,7 @@ type Server struct {
 	buffer   *buffer.RingBuffer
 	router   *router.Router
 	client   *webex.Client
+	triage   *triage.Store
 }
 
 // New creates a new MCP server wired to Webex tools.
@@ -50,13 +52,23 @@ func New(provider webex.TokenProvider, configPath string) (*Server, error) {
 	rtr := router.NewRouter(cfg, configPath)
 	lst := listener.New(provider, client, buf, rtr)
 
+	// Durable "still to process" reminder list. Degrades gracefully: if it
+	// can't be created we log and continue without it rather than fail to
+	// serve.
+	tri, err := triage.New()
+	if err != nil {
+		slog.Warn("triage store unavailable, continuing without persistent reminders", "error", err)
+	} else {
+		lst.SetTriageStore(tri)
+	}
+
 	s := mcpserver.NewMCPServer(
 		"webex",
 		"1.0.0",
 		mcpserver.WithToolCapabilities(true),
 	)
 
-	tools.Register(s, client, buf, rtr, lst)
+	tools.Register(s, client, buf, rtr, lst, tri)
 
 	return &Server{
 		mcp:      s,
@@ -64,6 +76,7 @@ func New(provider webex.TokenProvider, configPath string) (*Server, error) {
 		buffer:   buf,
 		router:   rtr,
 		client:   client,
+		triage:   tri,
 	}, nil
 }
 
