@@ -74,6 +74,22 @@ func NewOAuthProvider(config OAuthConfig) (*OAuthProvider, error) {
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 
+	// Migrate pre-v0.8.0 tokens.json into the keychain if present.
+	if migrated, err := store.MigrateTokensFromFile(); err != nil {
+		slog.Warn("token migration failed; continuing with current state", "error", err)
+	} else if migrated {
+		slog.Info("migrated tokens.json to OS keychain (legacy file removed)")
+	}
+
+	// Migrate WEBEX_CLIENT_SECRET from env into the keychain (only when
+	// no entry exists yet for this clientID). This makes future launches
+	// work even if the user later removes the env var.
+	if migrated, err := MigrateClientSecretFromEnv(config.ClientID, config.ClientSecret); err != nil {
+		slog.Warn("client-secret migration failed; continuing", "error", err)
+	} else if migrated {
+		slog.Info("stored OAuth client secret in OS keychain (env override still applies if set)")
+	}
+
 	// Try to load existing tokens.
 	tokens, err := store.Load()
 	if err == nil {

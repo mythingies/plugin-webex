@@ -119,13 +119,16 @@ Alternatively, create `.mcp.json` manually (or copy `.mcp.json.example`):
     "webex": {
       "command": "webex-mcp",
       "env": {
-        "WEBEX_CLIENT_ID": "your-client-id",
-        "WEBEX_CLIENT_SECRET": "your-client-secret"
+        "WEBEX_CLIENT_ID": "your-client-id"
       }
     }
   }
 }
 ```
+
+The `WEBEX_CLIENT_SECRET` and OAuth access/refresh tokens are stored in the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in `.mcp.json` or on disk in plaintext. Run `webex-mcp --setup` and the wizard handles writing the secret to the keychain.
+
+If your Linux environment has no Secret Service backend (headless servers, WSL, minimal containers), the binary falls back to a `0600` file in `~/.config/webex-mcp/`. Setting `WEBEX_CLIENT_SECRET` in the environment overrides the keychain — useful for CI and one-shot debugging.
 
 For OAuth, create an integration at [developer.webex.com/my-apps](https://developer.webex.com/my-apps/new/integration) with redirect URI `wmcp://oauth-callback` and scopes: `spark:messages_read`, `spark:messages_write`, `spark:rooms_read`, `spark:memberships_read`, `spark:people_read`, `meeting:schedules_read`, `meeting:transcripts_read`.
 
@@ -207,7 +210,7 @@ Claude Code launches the server process and communicates over stdin/stdout using
 |---|---|---|
 | `WEBEX_TOKEN` | — | Webex Personal Access Token |
 | `WEBEX_CLIENT_ID` | — | OAuth Client ID (alternative to PAT) |
-| `WEBEX_CLIENT_SECRET` | — | OAuth Client Secret |
+| `WEBEX_CLIENT_SECRET` | — | OAuth Client Secret. Optional override; normally stored in OS keychain by setup. |
 | `WEBEX_AGENTS_CONFIG` | `.webex-agents.yml` | Path to agent routing config |
 
 ### Agent Routing

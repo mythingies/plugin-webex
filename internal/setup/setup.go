@@ -74,6 +74,9 @@ func handleDetect(w http.ResponseWriter, r *http.Request) {
 	clientSecret := strings.TrimSpace(os.Getenv("WEBEX_CLIENT_SECRET"))
 	token := strings.TrimSpace(os.Getenv("WEBEX_TOKEN"))
 
+	// Env-set credentials override keychain (for CI/testing). Otherwise
+	// check the keychain for a stored client secret matching the env-set
+	// client_id.
 	switch {
 	case clientID != "" && clientSecret != "":
 		masked := clientID[:4] + "..." + clientID[len(clientID)-4:]
@@ -82,6 +85,17 @@ func handleDetect(w http.ResponseWriter, r *http.Request) {
 			ClientID: masked,
 			Message:  "OAuth credentials loaded from environment",
 		})
+	case clientID != "":
+		if _, err := auth.LoadClientSecret(clientID); err == nil {
+			masked := clientID[:4] + "..." + clientID[len(clientID)-4:]
+			writeJSON(w, detectResponse{
+				Mode:     "oauth",
+				ClientID: masked,
+				Message:  "OAuth credentials loaded (client_id from environment, secret from keychain)",
+			})
+			return
+		}
+		writeJSON(w, detectResponse{})
 	case token != "":
 		writeJSON(w, detectResponse{
 			Mode:    "pat",
@@ -202,11 +216,18 @@ func handleOAuth(binaryPath string) http.HandlerFunc {
 			return
 		}
 
+		// Persist the client secret to the OS keychain (or 0600 file
+		// fallback) so .mcp.json never holds it.
+		if err := auth.SaveClientSecret(clientID, clientSecret); err != nil {
+			writeJSON(w, apiResponse{Error: fmt.Sprintf("Failed to store client secret: %v", err)})
+			return
+		}
+
 		// Validate the token to get user info.
 		token, err := provider.Token()
 		if err == nil {
 			name, email, _ := validateToken(token)
-			config, err := writeMCPConfig("oauth", "", clientID, clientSecret)
+			config, err := writeMCPConfig("oauth", "", clientID, "")
 			if err != nil {
 				writeJSON(w, apiResponse{Error: fmt.Sprintf("Failed to save config: %v", err)})
 				return
@@ -219,7 +240,7 @@ func handleOAuth(binaryPath string) http.HandlerFunc {
 			return
 		}
 
-		config, err := writeMCPConfig("oauth", "", clientID, clientSecret)
+		config, err := writeMCPConfig("oauth", "", clientID, "")
 		if err != nil {
 			writeJSON(w, apiResponse{Error: fmt.Sprintf("Failed to save config: %v", err)})
 			return
@@ -264,7 +285,7 @@ func validateToken(token string) (displayName, email string, err error) {
 	return result.DisplayName, emailStr, nil
 }
 
-func writeMCPConfig(mode, token, clientID, clientSecret string) (string, error) {
+func writeMCPConfig(mode, token, clientID, _ string) (string, error) {
 	exe, _ := os.Executable()
 	exePath, _ := filepath.Abs(exe)
 
@@ -273,8 +294,8 @@ func writeMCPConfig(mode, token, clientID, clientSecret string) (string, error) 
 	case "pat":
 		env["WEBEX_TOKEN"] = token
 	case "oauth":
+		// Client secret is stored in the OS keychain, never in .mcp.json.
 		env["WEBEX_CLIENT_ID"] = clientID
-		env["WEBEX_CLIENT_SECRET"] = clientSecret
 	}
 
 	config := map[string]interface{}{

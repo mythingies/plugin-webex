@@ -8,22 +8,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Tech Stack
 
-- **Language:** Go 1.22+
-- **MCP SDK:** `mark3labs/mcp-go` (HTTP transport)
+- **Language:** Go (see `go.mod` for the pinned version)
+- **MCP SDK:** `mark3labs/mcp-go` over **stdio** — Claude Code launches the binary and speaks MCP over stdin/stdout (`internal/server/server.go`, `NewStdioServer`). There is no listening HTTP port.
 - **WebSocket:** `webex-message-handler` Go implementation (for real-time inbound)
+- **Credential storage:** `zalando/go-keyring` (OS keychain) with a 0600-file fallback
 - **Lint:** `golangci-lint`
 - **Test:** `go test`
 - **Build:** `go build` / Makefile
 
 ## Authentication
 
-Users authenticate via a **Webex Personal Access Token (PAT)** generated at https://developer.webex.com/docs/getting-your-personal-access-token. Set as `WEBEX_TOKEN` environment variable. The MCP server reads it on startup.
+`resolveAuth()` in `cmd/webex-mcp/main.go` selects the auth mode at startup, in priority order:
+
+1. **PAT** — `WEBEX_TOKEN` set → `auth.NewStaticProvider`. Quick start; the token expires in ~12h. This is the only mode the bundled curl-based skill (`skills/webex/`) supports.
+2. **OAuth (env override)** — `WEBEX_CLIENT_ID` + `WEBEX_CLIENT_SECRET` both set → OAuth with the secret taken from the environment. Intended for CI/testing.
+3. **OAuth (keychain)** — `WEBEX_CLIENT_ID` set, secret absent from env → secret loaded from the OS keychain. This is the normal end-user path written by `webex-mcp --setup`.
+
+OAuth uses PKCE with a `wmcp://oauth-callback` custom URI scheme (`auth.RegisterProtocol`, `--register-protocol`, `--oauth-callback`). Tokens auto-refresh.
+
+### Credential storage (`internal/auth/`)
+
+OAuth access/refresh tokens **and** the OAuth client secret live in the OS keychain (service `webex-mcp`, accounts `oauth-tokens` and `oauth-client-secret-<clientID>`), never in plaintext on disk. `.mcp.json` holds only the non-secret `WEBEX_CLIENT_ID` plus the binary path.
+
+- `keyringAvailable()` probes the backend at construction; when no Secret Service exists (headless Linux, WSL, minimal containers) the store falls back to 0600 files in `~/.config/webex-mcp/`. On Windows that fallback path also gets an explicit ACL via `auth.RestrictFileAccess` (icacls `/inheritance:r`).
+- `NewOAuthProvider` runs auto-migration on first launch: a pre-existing `tokens.json` is imported into the keychain and deleted (`MigrateTokensFromFile`), and a `WEBEX_CLIENT_SECRET` env var is copied into the keychain (`MigrateClientSecretFromEnv`, idempotent).
+- Setting `WEBEX_CLIENT_SECRET` in the env always overrides the keychain — the CI/debugging escape hatch.
 
 ## Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│  webex-mcp server (local HTTP MCP server)                     │
+│  webex-mcp server (stdio)                                     │
 │                                                               │
 │  ┌──────────────┐     ┌────────────────────────────────────┐ │
 │  │ REST proxy    │     │ WebSocket listener (toggleable)    │ │
@@ -33,13 +48,15 @@ Users authenticate via a **Webex Personal Access Token (PAT)** generated at http
 │  │ calls only    │     │ → priority classification          │ │
 │  └──────────────┘     └────────────────────────────────────┘ │
 └───────────────────────────────────────────────────────────────┘
-         ↕ HTTP (MCP)                    ↕ WebSocket (Mercury)
+         ↕ stdio (MCP)                   ↕ WebSocket (Mercury)
       Claude Code                      Webex Cloud
 ```
 
 **Two modes, one binary:**
 - **REST mode** (always on): Stateless proxy. Claude calls MCP tools → Webex REST API.
 - **WebSocket mode** (toggleable via `/webex connect`): Real-time inbound messages via `webex-message-handler`. Messages buffered in memory, routed to agents.
+
+`server.New()` (`internal/server/server.go`) wires the Webex client, ring buffer, router, and listener together, then `tools.Register` attaches every MCP tool. `Start()` serves MCP over stdin/stdout. The `cmd/webex-mcp` binary also dispatches the `--setup`, `--register-protocol`, and `--oauth-callback` subcommands before entering the server loop.
 
 ## MCP Tools
 

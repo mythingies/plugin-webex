@@ -66,10 +66,10 @@ Files: `internal/tools/send_message.go:31-55`
 
 ### Layer 2: Data Operations
 
-**F1 — Plaintext credential storage (T22 | Critical)**
-OAuth tokens stored as plaintext JSON at `~/.config/webex-mcp/tokens.json` (0600 perms). PAT tokens loaded from `WEBEX_TOKEN` env var. `.mcp.json` (gitignored, not tracked) stores `WEBEX_CLIENT_ID` and `WEBEX_CLIENT_SECRET` in plaintext. While `.gitignore` correctly excludes these files, on-disk plaintext is vulnerable to local privilege escalation, process memory dumps, and filesystem access.
+**F1 — Plaintext credential storage (T22 | Mitigated v0.8.0)**
+OAuth access/refresh tokens and `WEBEX_CLIENT_SECRET` are stored in the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) via `github.com/zalando/go-keyring`. `.mcp.json` retains only `WEBEX_CLIENT_ID` (non-secret) and the binary path. PAT tokens still loaded from `WEBEX_TOKEN` env var per Claude Code convention. On Linux without a Secret Service backend (headless servers, WSL, minimal containers), the binary falls back to `0600` files in `~/.config/webex-mcp/`; on Windows that fallback path applies an explicit ACL via `icacls /inheritance:r` (v0.7.1). v0.8.0 auto-migrates legacy `tokens.json` and any `WEBEX_CLIENT_SECRET` env var into the keychain on first run.
 
-Files: `internal/auth/store.go:60`, `internal/auth/oauth.go:81`, `.mcp.json`, `.env.txt`
+Files: `internal/auth/store.go`, `internal/auth/secret.go`, `internal/auth/migrate.go`
 
 **F11 — YAML config injection (T12, CWE-502 | Medium)**
 `.webex-agents.yml` parsed via `yaml.Unmarshal()` with 1MB size limit but no schema validation. YAML anchors/aliases could amplify payloads. Agent names, priority values, and space patterns are not validated against allowlists.

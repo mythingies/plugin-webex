@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-02
+
+### Security
+- OAuth access/refresh tokens now stored in the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service via `github.com/zalando/go-keyring`) instead of plaintext JSON at `~/.config/webex-mcp/tokens.json`. Closes the on-disk plaintext-token attack surface flagged as F1 (Critical) in `THREAT_MODEL.md`.
+- `WEBEX_CLIENT_SECRET` now stored in the OS keychain instead of being embedded in `.mcp.json`. Setup wizard writes the secret to the keychain and emits a `.mcp.json` containing only `WEBEX_CLIENT_ID` (non-secret) plus the binary path.
+- Auto-migration on first run of v0.8.0: any pre-existing `tokens.json` is imported into the keychain and the legacy file is removed. Any `WEBEX_CLIENT_SECRET` set in the environment is copied into the keychain (no-op when an entry already exists). Migration is logged via `slog`.
+- Linux fallback: when Secret Service is unavailable (`go-keyring` probe fails), the binary falls back to existing 0600-file storage. PAT (`WEBEX_TOKEN`) flow is unchanged — environment variables remain the recommended channel per Claude Code convention.
+- Setting `WEBEX_CLIENT_SECRET` in the environment overrides the keychain at startup (CI/testing escape hatch).
+
+### Added
+- `auth.LoadClientSecret(clientID)` / `auth.SaveClientSecret(clientID, secret)` / `auth.DeleteClientSecret(clientID)` — keychain-backed accessors with file fallback.
+- `TokenStore.MigrateTokensFromFile()` and `auth.MigrateClientSecretFromEnv()` — idempotent migration helpers.
+- `TokenStore.UsingKeyring()` — reports which backend is active.
+- `keyringAvailable()` probe that detects Secret Service availability on Linux without crashing.
+- 8 new tests covering keychain save/load, deletion, missing-key errors, file-to-keychain migration, env-secret migration idempotency, and `sanitizeID` path-injection defense.
+
+### Changed
+- `TokenStore` now construction-time probes the OS keychain and uses the file fallback only when no backend exists. Public `Save`/`Load`/`Delete`/`Path` API is unchanged; existing tests pass without modification.
+- Setup wizard's OAuth flow writes `WEBEX_CLIENT_SECRET` to the keychain before generating `.mcp.json`. The generated `.mcp.json` no longer contains the secret in any form.
+- `cmd/webex-mcp/main.go` resolves the OAuth client secret from the keychain when `WEBEX_CLIENT_ID` is set in the environment but `WEBEX_CLIENT_SECRET` is not.
+
+### Removed
+- `WEBEX_CLIENT_SECRET` from setup wizard's `.mcp.json` output. Field is no longer required for normal usage.
+
 ## [0.7.1] - 2026-05-20
 
 ### Security

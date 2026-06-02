@@ -80,11 +80,14 @@ func handleRegisterProtocol() {
 	fmt.Fprintln(os.Stderr, "Registered wmcp:// protocol handler successfully.")
 }
 
-// resolveAuth determines the authentication mode from environment variables.
+// resolveAuth determines the authentication mode from environment variables
+// and the OS keychain.
 //
 // Priority:
 //  1. WEBEX_TOKEN — Personal Access Token (static)
-//  2. WEBEX_CLIENT_ID + WEBEX_CLIENT_SECRET — OAuth integration
+//  2. WEBEX_CLIENT_ID + WEBEX_CLIENT_SECRET (env) — OAuth integration; env
+//     wins when present, useful for CI/testing
+//  3. WEBEX_CLIENT_ID (env) + secret from OS keychain — preferred path
 func resolveAuth() webex.TokenProvider {
 	token := strings.TrimSpace(os.Getenv("WEBEX_TOKEN"))
 	clientID := strings.TrimSpace(os.Getenv("WEBEX_CLIENT_ID"))
@@ -98,8 +101,15 @@ func resolveAuth() webex.TokenProvider {
 	case clientID != "" && clientSecret != "":
 		return resolveOAuth(clientID, clientSecret)
 
-	case clientID != "" || clientSecret != "":
-		log.Fatal("OAuth credentials incomplete. Both WEBEX_CLIENT_ID and WEBEX_CLIENT_SECRET are required.")
+	case clientID != "":
+		secret, err := auth.LoadClientSecret(clientID)
+		if err != nil {
+			log.Fatal("OAuth client secret not found in keychain for the configured WEBEX_CLIENT_ID. Run `webex-mcp --setup` to store it, or set WEBEX_CLIENT_SECRET in the environment.")
+		}
+		return resolveOAuth(clientID, secret)
+
+	case clientSecret != "":
+		log.Fatal("OAuth credentials incomplete. WEBEX_CLIENT_ID is required.")
 
 	default:
 		log.Fatal("Authentication required.\n\n" +
