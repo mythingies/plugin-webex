@@ -1,0 +1,59 @@
+internal/tools/mark_processed.go
+  s_c41631b1e5a4a8::t_4d695c90cc6666 1-53
+README.md
+  s_c41631b1e5a4a8::t_3683dec8b5ca4c 168-169,171-172
+  s_c41631b1e5a4a8::t_3cc94a83b1fd9f 187-205
+CLAUDE.md
+  s_c41631b1e5a4a8::t_43675c386cf560 78-79,81-82
+  s_c41631b1e5a4a8::t_c563f461eb8077 132
+  s_c41631b1e5a4a8::t_4fd6d0d243409f 152-153
+internal/tools/get_pending.go
+  s_c41631b1e5a4a8::t_46aa237a06e960 1-41
+internal/buffer/buffer.go
+  s_c41631b1e5a4a8::t_48b62939af264f 162-191
+internal/tools/tools.go
+  s_c41631b1e5a4a8::t_7624699efe413b 157
+  s_c41631b1e5a4a8::t_6c995e59e0f6ae 182-188
+  s_c41631b1e5a4a8::t_2ed01155e8296e 15
+internal/tools/get_priority_inbox.go
+  s_c41631b1e5a4a8::t_cbab33f017259a 16
+  s_c41631b1e5a4a8::t_28b422f37cd4b0 44,49
+internal/listener/listener.go
+  s_c41631b1e5a4a8::t_ddc4e67f3a5a81 72-80
+  s_c41631b1e5a4a8::t_3d4dbefedfd10f 16
+  s_c41631b1e5a4a8::t_7e4beec8c88364 43
+  s_c41631b1e5a4a8::t_5181699c5a85da 264-284
+internal/server/server.go
+  s_c41631b1e5a4a8::t_7a51107f448945 25
+  s_c41631b1e5a4a8::t_afe5a2e5705d87 14
+  s_c41631b1e5a4a8::t_f5511f5bd9682c 55-64,71,79
+internal/triage/triage.go
+  s_c41631b1e5a4a8::t_20f7609541e11e 1-275
+CHANGELOG.md
+  s_c41631b1e5a4a8::t_5aa1a1b86a7d0d 10-24
+internal/tools/get_notifications.go
+  s_c41631b1e5a4a8::t_855a53fc0187f1 15-18,26-27,32
+internal/buffer/buffer_test.go
+  s_c41631b1e5a4a8::t_6ed9f8692771c8 122-155
+internal/triage/triage_test.go
+  s_c41631b1e5a4a8::t_d3e69993ae179a 1-214
+internal/listener/listener_test.go
+  s_c41631b1e5a4a8::t_a258b0e41a4c0f 9
+  s_c41631b1e5a4a8::t_eca286d59761ef 147-203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8e41a68493e3f808bee1b5a50ddd6b7de91d5e1b",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3copelan@users.noreply.github.com>"
+    }
+  }
+}
