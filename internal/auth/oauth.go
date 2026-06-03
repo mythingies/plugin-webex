@@ -24,8 +24,16 @@ const (
 	tokenEndpoint = "https://webexapis.com/v1/access_token" //nolint:gosec // URL, not a credential
 
 	// DefaultScopes covers the APIs this plugin uses.
-	// Override with WEBEX_SCOPES env var, or use "spark:all" for full access.
-	DefaultScopes = "spark:messages_read spark:messages_write spark:rooms_read spark:memberships_read spark:people_read meeting:schedules_read meeting:transcripts_read"
+	//
+	// spark:all is required (not just the granular spark:messages_* /
+	// spark:rooms_* scopes) because the real-time WebSocket listener
+	// registers a Mercury device with WDM (wdm-a.wbx2.com), and that
+	// endpoint rejects granular-scoped tokens with HTTP 403. spark:all is
+	// the only public OAuth scope that grants it — matching what a PAT
+	// carries. The meeting:* scopes are a separate family that spark:all
+	// does NOT cover, so they're listed explicitly.
+	// Override with the WEBEX_SCOPES env var.
+	DefaultScopes = "spark:all meeting:schedules_read meeting:transcripts_read"
 
 	// refreshBuffer is how early before expiry we refresh.
 	refreshBuffer = 5 * time.Minute

@@ -357,13 +357,9 @@
           <li>Click "Create a New App" &gt; "Create an Integration"</li>
           <li>Choose an app name</li>
           <li>Set Redirect URI to: <code>wmcp://oauth-callback</code></li>
-          <li>Select these exact scopes (must match — extra scopes are fine, but missing any will break auth):
+          <li>Select these exact scopes (must match — extra scopes are fine, but missing any will break auth). <code>spark:all</code> is required for the real-time listener: the Mercury/WDM device-registration endpoint rejects granular scopes with HTTP 403.
             <div class="scopes" id="scopes-list">
-              <span class="scope-tag">spark:messages_read</span>
-              <span class="scope-tag">spark:messages_write</span>
-              <span class="scope-tag">spark:rooms_read</span>
-              <span class="scope-tag">spark:memberships_read</span>
-              <span class="scope-tag">spark:people_read</span>
+              <span class="scope-tag">spark:all</span>
               <span class="scope-tag">meeting:schedules_read</span>
               <span class="scope-tag">meeting:transcripts_read</span>
             </div>

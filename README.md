@@ -130,7 +130,9 @@ The `WEBEX_CLIENT_SECRET` and OAuth access/refresh tokens are stored in the OS k
 
 If your Linux environment has no Secret Service backend (headless servers, WSL, minimal containers), the binary falls back to a `0600` file in `~/.config/webex-mcp/`. Setting `WEBEX_CLIENT_SECRET` in the environment overrides the keychain — useful for CI and one-shot debugging.
 
-For OAuth, create an integration at [developer.webex.com/my-apps](https://developer.webex.com/my-apps/new/integration) with redirect URI `wmcp://oauth-callback` and scopes: `spark:messages_read`, `spark:messages_write`, `spark:rooms_read`, `spark:memberships_read`, `spark:people_read`, `meeting:schedules_read`, `meeting:transcripts_read`.
+For OAuth, create an integration at [developer.webex.com/my-apps](https://developer.webex.com/my-apps/new/integration) with redirect URI `wmcp://oauth-callback` and scopes: `spark:all`, `meeting:schedules_read`, `meeting:transcripts_read`.
+
+> **Why `spark:all`?** The real-time WebSocket listener registers a Mercury device with Webex's WDM service (`wdm-a.wbx2.com`). That endpoint rejects granular-scoped tokens (`spark:messages_read`, `spark:rooms_read`, …) with **HTTP 403** — `spark:all` is the only public OAuth scope that grants it, matching what a Personal Access Token carries. If you only need the REST tools (no real-time listener), the granular scopes still work; drop `spark:all` and list `spark:messages_read spark:messages_write spark:rooms_read spark:memberships_read spark:people_read` instead. The `meeting:*` scopes are a separate family and are required either way for the meeting tools.
 
 ## Skill vs MCP
 

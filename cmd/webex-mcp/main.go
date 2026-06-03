@@ -119,10 +119,9 @@ func resolveAuth() webex.TokenProvider {
 			"  Option 2 — OAuth Integration (persistent, auto-refresh):\n" +
 			"    1. Create integration at: https://developer.webex.com/my-apps/new/integration\n" +
 			"    2. Set Redirect URI to: wmcp://oauth-callback\n" +
-			"    3. Select scopes: spark:messages_read, spark:messages_write, spark:rooms_read,\n" +
-			"       spark:memberships_read, spark:people_read, meeting:schedules_read,\n" +
-			"       meeting:transcripts_read, meeting:participants_read\n" +
-			"       (or spark:all for full access)\n" +
+			"    3. Select scopes: spark:all, meeting:schedules_read, meeting:transcripts_read\n" +
+			"       (spark:all is required for the real-time listener — WDM device\n" +
+			"        registration rejects granular scopes with HTTP 403)\n" +
 			"    4. Export credentials:\n" +
 			"       export WEBEX_CLIENT_ID=<client-id>\n" +
 			"       export WEBEX_CLIENT_SECRET=<client-secret>\n" +

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-03
+
+### Fixed
+- **Triage never recorded inbound messages** — live Webex Mercury messages arrive with `DecryptedMessage.ID` empty (the `webex-message-handler` library maps it from the comment object's `Object.ID`, which Webex leaves blank for conversation activities). `triage.Add` rejects empty-ID items, so no inbound message was ever persisted to the durable pending list, even though the in-memory ring buffer (which has no ID requirement) kept them. The listener now falls back to the activity ID (`msg.Raw.ID`, which Webex *does* populate) via a new `effectiveMessageID` helper, used as the key for both the ring buffer and triage. Verified end-to-end against live traffic: reminders now record, reading leaves them untouched, and `mark_processed` clears only the named item. Adds `TestEffectiveMessageID` and the `TestOnMessageTriageUsesActivityIDFallback` regression test.
+
+### Changed
+- **OAuth default scopes now request `spark:all`** (plus `meeting:schedules_read meeting:transcripts_read`) instead of the granular `spark:messages_*`/`spark:rooms_*` set. The real-time WebSocket listener registers a Mercury device with Webex WDM (`wdm-a.wbx2.com`), and that endpoint rejects granular-scoped tokens with **HTTP 403**; `spark:all` is the only public OAuth scope that grants it (matching what a Personal Access Token carries). REST-only users who don't need the listener can still use the granular scopes — see the README note. Updated `internal/auth/oauth.go`, the setup wizard (`internal/setup/setup.html`), `README.md`, and the startup help text in `cmd/webex-mcp/main.go`.
+
 ## [0.9.0] - 2026-06-02
 
 ### Added

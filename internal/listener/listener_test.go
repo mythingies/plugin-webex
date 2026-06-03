@@ -201,6 +201,86 @@ func TestOnMessageRecordsTriagePending(t *testing.T) {
 	}
 }
 
+// TestEffectiveMessageID verifies the activity-ID fallback. Live Mercury
+// messages leave msg.ID (Object.ID) empty but populate the activity ID
+// (Raw.ID); without the fallback, triage.Add rejects every real message.
+func TestEffectiveMessageID(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  wmh.DecryptedMessage
+		want string
+	}{
+		{
+			name: "object id present wins",
+			msg:  wmh.DecryptedMessage{ID: "obj-id", Raw: &wmh.MercuryActivity{ID: "act-id"}},
+			want: "obj-id",
+		},
+		{
+			name: "falls back to activity id when object id empty (live case)",
+			msg:  wmh.DecryptedMessage{ID: "", Raw: &wmh.MercuryActivity{ID: "act-id"}},
+			want: "act-id",
+		},
+		{
+			name: "empty when neither present",
+			msg:  wmh.DecryptedMessage{ID: "", Raw: nil},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effectiveMessageID(tt.msg); got != tt.want {
+				t.Errorf("effectiveMessageID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOnMessageTriageUsesActivityIDFallback is a regression test for the live
+// bug where inbound messages never created triage reminders: msg.ID arrives
+// empty (Object.ID), so triage.Add rejected the item. With the Raw.ID fallback
+// the reminder must be recorded and keyed by the activity ID.
+func TestOnMessageTriageUsesActivityIDFallback(t *testing.T) {
+	cfg := &router.Config{
+		Routes: []router.Route{
+			{Match: router.MatchCondition{Space: "*"}, Agent: "general", Priority: "low"},
+		},
+	}
+	rtr := router.NewRouter(cfg, "")
+	buf := buffer.New(100)
+	tri, err := triage.NewWithPath("") // in-memory
+	if err != nil {
+		t.Fatalf("triage.NewWithPath: %v", err)
+	}
+
+	l := &Listener{
+		tokenProvider: staticToken("fake"),
+		buf:           buf,
+		rtr:           rtr,
+		triage:        tri,
+		selfPersonID:  "self-id",
+		spaceNames:    map[string]string{"room1": "General"},
+	}
+
+	// Live-shaped message: empty ID, activity ID only in Raw.
+	l.onMessage(wmh.DecryptedMessage{
+		ID:          "",
+		RoomID:      "room1",
+		PersonID:    "user1",
+		PersonEmail: "user@test.com",
+		Text:        "can you look at this?",
+		Created:     time.Now().Format(time.RFC3339),
+		RoomType:    "group",
+		Raw:         &wmh.MercuryActivity{ID: "act-123"},
+	})
+
+	if tri.PendingCount() != 1 {
+		t.Fatalf("expected 1 pending triage item via activity-ID fallback, got %d", tri.PendingCount())
+	}
+	if it, ok := tri.Get("act-123"); !ok || it.Status != triage.StatusPending {
+		t.Errorf("expected reminder keyed by activity ID act-123, got %+v (ok=%v)", it, ok)
+	}
+}
+
 // TestStatusStopped verifies status when listener is not running.
 func TestStatusStopped(t *testing.T) {
 	l := &Listener{}

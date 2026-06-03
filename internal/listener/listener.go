@@ -205,6 +205,24 @@ func (l *Listener) rateLimitAllow() bool {
 	return true
 }
 
+// effectiveMessageID returns a stable, unique key for an inbound message.
+//
+// The wmh library maps DecryptedMessage.ID from the Mercury comment object's
+// ID (Object.ID), which Webex leaves empty for live conversation activities.
+// The enclosing activity ID (Raw.ID) is populated, so we use it as the
+// fallback. An empty result means no key is available at all (e.g. a synthetic
+// message in tests with no Raw), in which case the caller skips the durable
+// reminder rather than recording an unkeyed item.
+func effectiveMessageID(msg wmh.DecryptedMessage) string {
+	if msg.ID != "" {
+		return msg.ID
+	}
+	if msg.Raw != nil {
+		return msg.Raw.ID
+	}
+	return ""
+}
+
 // onMessage processes an inbound message: enriches, routes, and buffers it.
 func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 	// Rate limiting.
@@ -247,8 +265,18 @@ func (l *Listener) onMessage(msg wmh.DecryptedMessage) {
 		created = time.Now()
 	}
 
+	// Live Mercury messages populate the activity ID (msg.Raw.ID) but leave
+	// the comment object's ID (msg.ID, mapped from Object.ID by the wmh
+	// library) empty. Fall back to the activity ID so each message has a
+	// stable, unique key — without it triage.Add rejects the item ("ID
+	// required") and no durable reminder is ever recorded.
+	id := effectiveMessageID(msg)
+	if id == "" {
+		slog.Warn("inbound message has no usable ID; triage reminder will be skipped", "room", msg.RoomID)
+	}
+
 	notif := buffer.NotificationMessage{
-		ID:          msg.ID,
+		ID:          id,
 		RoomID:      msg.RoomID,
 		RoomTitle:   roomTitle,
 		PersonID:    msg.PersonID,
