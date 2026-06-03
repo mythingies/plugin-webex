@@ -1,0 +1,32 @@
+README.md
+  s_c41631b1e5a4a8::t_46c86d871ef646 133-135
+internal/setup/setup.html
+  s_c41631b1e5a4a8::t_5f947c31338bfd 360,362
+cmd/webex-mcp/main.go
+  s_c41631b1e5a4a8::t_f79d0cdd76d6e9 122-124
+internal/auth/oauth.go
+  s_c41631b1e5a4a8::t_b922fbdfb483ee 27-36
+internal/listener/listener.go
+  s_c41631b1e5a4a8::t_5872740ea250de 268-277,279
+  s_c41631b1e5a4a8::t_4c87aeb2781e22 208-225
+internal/listener/listener_test.go
+  s_c41631b1e5a4a8::t_dc357960803bd9 204-283
+CHANGELOG.md
+  s_c41631b1e5a4a8::t_dde5cb4ba7bc08 10-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "61b6269e9c67b39c37f3e6afd8fe985c1537febc",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
