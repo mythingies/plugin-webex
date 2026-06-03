@@ -1,11 +1,11 @@
 module github.com/mythingies/plugin-webex
 
-go 1.26.0
+go 1.26.2
 
 toolchain go1.26.4
 
 require (
-	github.com/3rg0n/webex-message-handler/go v0.6.0
+	github.com/3rg0n/webex-message-handler/go v0.6.10
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/zalando/go-keyring v0.2.8
 	gopkg.in/yaml.v3 v3.0.1
@@ -14,6 +14,7 @@ require (
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/coder/websocket v1.8.14 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
@@ -25,5 +26,4 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
-	nhooyr.io/websocket v1.8.17 // indirect
 )
