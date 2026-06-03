@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-06-03
+
+### Security
+- Pinned the Go toolchain to **go1.26.4** (`toolchain` directive in `go.mod`), clearing two standard-library vulnerabilities that `govulncheck` flagged as reachable from this code: **GO-2026-5037** (inefficient candidate hostname parsing in `crypto/x509`, reachable via the setup wizard's HTTP server and an error path in `main.go`) and **GO-2026-5039** (unescaped inputs in `net/textproto` errors, reachable via `http.Server.Serve` → `ReadMIMEHeader`).
+- Bumped `golang.org/x/crypto` v0.48.0 → **v0.52.0** (clears GO-2026-5015 through GO-2026-5021, GO-2026-5023, GO-2026-5033) and `golang.org/x/sys` v0.41.0 → **v0.45.0** (clears GO-2026-5024). These were transitive dependencies not called by our code, bumped to eliminate the advisories entirely. `govulncheck ./...` now reports **0 vulnerabilities**.
+
 ## [0.9.1] - 2026-06-03
 
 ### Fixed
