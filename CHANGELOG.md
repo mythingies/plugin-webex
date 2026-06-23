@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-06-23
+
+### Changed
+- Bumped `github.com/3rg0n/webex-message-handler/go` v0.6.0 → **v0.6.12**. Upstream now populates `DecryptedMessage.ID` from the activity ID (`decrypted.ID`) instead of the always-empty comment `Object.ID`, fixing at the source the empty-ID problem that v0.9.1's `effectiveMessageID` fallback worked around — the fallback is retained as defensive belt-and-suspenders. The release also adds `ParentID`, `URL`, `MentionedPeople`/`MentionedGroups`, and `Files` fields to `DecryptedMessage`.
+- Bumped `github.com/mark3labs/mcp-go` v0.44.1 → **v0.55.0** (jsonschema backend moved from `invopop/jsonschema` to `google/jsonschema-go`; build, tests, and govulncheck all clean).
+- Bumped transitive/indirect dependencies to latest: `golang.org/x/crypto` v0.52.0 → v0.53.0, `golang.org/x/sys` v0.45.0 → v0.46.0, `golang.org/x/text` v0.37.0 → v0.38.0, `coder/websocket` v1.8.15, `google/jsonschema-go` v0.4.3.
+- Bumped GitHub Actions: `actions/setup-go` 6.3.0 → 6.4.0, `actions/upload-artifact` 7.0.0 → 7.0.1, `actions/dependency-review-action` 4.7.1 → 4.9.0, `github/codeql-action` 3.35.1 → 4.35.1, `softprops/action-gh-release` 2.6.1 → 3.0.0.
+
+### Security
+- `govulncheck ./...` reports **0 vulnerabilities** after the dependency bumps. CodeQL: 0 open alerts.
+
 ## [0.9.2] - 2026-06-03
 
 ### Security
