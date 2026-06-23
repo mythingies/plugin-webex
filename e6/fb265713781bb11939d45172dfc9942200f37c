@@ -1,0 +1,19 @@
+CHANGELOG.md
+  s_c41631b1e5a4a8::t_b7ba883a61f8ee 10-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.10",
+  "base_commit_sha": "e6fb265713781bb11939d45172dfc9942200f37c",
+  "prompts": {},
+  "sessions": {
+    "s_c41631b1e5a4a8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bf0639a-9adb-4edc-bdda-968dba0fa431",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
