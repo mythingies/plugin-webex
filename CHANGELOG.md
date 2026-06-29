@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-06-25
+
+### Added
+- `webex-mcp --setup` is now **detect-first**: if a usable OAuth session already exists, it prints who you're signed in as and the token validity, then exits **without** opening a browser — instead of forcing a redundant authorization flow (which previously could stall on a corporate SSO page even though stored tokens were already valid). Add `--force` to re-authenticate the same account anyway.
+- `webex-mcp --switch` — sign out the current Webex user and start setup for a different account (gh-CLI `auth switch` analogue). Clears stored OAuth **tokens** only; the OAuth client secret is left in the keychain so re-auth under the same integration needs no re-entry.
+- `webex-mcp --logout` — remove stored OAuth tokens without starting a new setup flow.
+- `internal/setup.CurrentAuth()` / `Logout()` plus a pure, unit-tested `evalExistingAuth` decision helper (`status_test.go` covers: valid access → identity confirmed; expired access + valid refresh → session without identity; live-validation failure + valid refresh → graceful fallback; expired refresh → must re-auth). Session detection is client-ID-independent (reads the stored token entry directly), so it works from a bare shell with no env vars set.
+
 ## [0.9.3] - 2026-06-23
 
 ### Changed
