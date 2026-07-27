@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/3rg0n/webex-message-handler/go v0.6.12
-	github.com/mark3labs/mcp-go v0.55.0
+	github.com/mark3labs/mcp-go v0.57.0
 	github.com/zalando/go-keyring v0.2.8
 	gopkg.in/yaml.v3 v3.0.1
 )
