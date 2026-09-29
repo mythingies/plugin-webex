@@ -1,0 +1,19 @@
+.gitattributes
+  s_e2e0e26e0d3516::t_c1583dab3f649a 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5c2b79a3d2b8906b94ee669c17431a7abd9ab283",
+  "prompts": {},
+  "sessions": {
+    "s_e2e0e26e0d3516": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ee07b2-2651-4be8-826f-556a564cbcef",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
