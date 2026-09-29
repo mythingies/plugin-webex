@@ -1,0 +1,24 @@
+docs/adr/0001-local-index-daemon-and-agent-dispatch.md
+  s_e2e0e26e0d3516::t_0ecd49a7bc2305 1-23,34-44,49-61
+  s_e2e0e26e0d3516::t_3463981f530ff0 62
+  s_e2e0e26e0d3516::t_3f07ff23b7b092 24-33
+  s_e2e0e26e0d3516::t_62b13c84bb230a 45-48
+CHANGELOG.md
+  s_e2e0e26e0d3516::t_e2dddd4d7b4579 10-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c57a9d3fbe8770b960d9305b16bfb5509fa7a3a8",
+  "prompts": {},
+  "sessions": {
+    "s_e2e0e26e0d3516": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ee07b2-2651-4be8-826f-556a564cbcef",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
