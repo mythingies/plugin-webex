@@ -1,0 +1,30 @@
+CHANGELOG.md
+  s_e2e0e26e0d3516::t_e2dddd4d7b4579 10,12
+  s_e2e0e26e0d3516::t_127b41130bd7e2 11
+docs/adr/0001-local-index-daemon-and-agent-dispatch.md
+  s_e2e0e26e0d3516::t_491cd72e4c7ce5 66
+  s_e2e0e26e0d3516::t_d3a42fa92e2b99 46
+  s_e2e0e26e0d3516::t_0ecd49a7bc2305 1-16,20-25,36-44,54-65,67
+  s_e2e0e26e0d3516::t_3463981f530ff0 68
+  s_e2e0e26e0d3516::t_e18abbc6a08744 45
+  s_e2e0e26e0d3516::t_62b13c84bb230a 47
+  s_e2e0e26e0d3516::t_336e59669673a5 17-19
+  s_e2e0e26e0d3516::t_ce0f165f19c479 48-53
+  s_e2e0e26e0d3516::t_3f07ff23b7b092 26-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1fb097c3d5806ea5c68a1b50806bdaca4b06d2bb",
+  "prompts": {},
+  "sessions": {
+    "s_e2e0e26e0d3516": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ee07b2-2651-4be8-826f-556a564cbcef",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
