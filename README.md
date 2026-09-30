@@ -7,7 +7,7 @@ Cisco Webex integration for Claude Code — read messages, send replies, monitor
 > **Use the official Webex MCP if** you want quick request/response access to Webex from Claude Code and don't need real-time push or local routing.
 >
 > **Use plugin-webex if** you need any of the following, which Webex MCP does not currently provide:
-> - **Real-time inbound** via WebSocket (Mercury) with a local ring buffer — agents can drain messages that arrived while idle
+> - **Real-time inbound** via WebSocket (Mercury) with a local ring buffer — agents can read messages that arrived while idle
 > - **Agent routing** with `.webex-agents.yml` — classify inbound messages by space/keywords/DM, assign priorities, isolate per-agent
 > - **Priority inbox** and **@mention filtering** on the local buffer
 > - **Aggregation tools** like `get_digest` (per-space activity summary) and `get_cross_space_context` (search-with-context across all your spaces)
@@ -275,7 +275,7 @@ settings:
 When `get_notifications`, `get_priority_inbox`, or `get_mentions` returns
 messages, each one carries its routed agent name. The MCP server inlines
 `agents/<agent-name>.md` (relative to the working directory) into the tool
-result so Claude has the right playbook in-context for every drained message.
+result so Claude has the right playbook in-context for every returned message.
 
 For example, if `agents/alert-triage.md` contains your triage runbook and a
 message routes to `alert-triage`, the tool result looks like:
@@ -341,7 +341,7 @@ plugin-webex/
 
 ## Security
 
-- **Token handling**: Tokens are passed via environment variables and held in-memory only. Never logged or written to disk (except encrypted OAuth token store at `~/.config/webex-mcp/tokens.json` with 0600 permissions).
+- **Token handling**: Tokens are never logged. A PAT is passed via environment variable and held in-memory only. OAuth access/refresh tokens and the client secret are stored in the OS keychain; where no keychain backend exists, they fall back to `0600` files in `~/.config/webex-mcp/` (with an explicit ACL on Windows). A legacy `tokens.json` is migrated into the keychain and deleted on first launch.
 - **OAuth PKCE**: Authorization code flow with S256 code challenge. No client secret exposed to the browser.
 - **Custom URI scheme**: `wmcp://` callback uses file-based IPC — no localhost HTTP server needed.
 - **Redirect validation**: All redirect hops are checked against the original host to prevent token leakage.

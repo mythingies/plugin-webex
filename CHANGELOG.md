@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Refreshed `CLAUDE.md` against the current code: removed the nonexistent `make run` target and `add_reaction` tool, and documented the `--switch`/`--logout`/`--setup --force` subcommands, the inbound message path, playbook inlining, and the tool-layer security invariants.
+- Docs now describe `get_notifications` as a non-destructive peek instead of a "drain" (`skills/webex-monitor/SKILL.md`, README). The monitor skill now ends with `mark_processed`.
+- README Security section now reflects keychain credential storage in place of the old `tokens.json` description.
+
+### Fixed
+- The 0.1.0 entry listing an `add_reaction` tool was wrong: the tool was documented but never implemented.
+
 ## [0.9.4] - 2026-06-25
 
 ### Added
