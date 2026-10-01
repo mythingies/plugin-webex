@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refreshed `CLAUDE.md` against the current code: removed the nonexistent `make run` target and `add_reaction` tool, and documented the `--switch`/`--logout`/`--setup --force` subcommands, the inbound message path, playbook inlining, and the tool-layer security invariants.
 - Docs now describe `get_notifications` as a non-destructive peek instead of a "drain" (`skills/webex-monitor/SKILL.md`, README). The monitor skill now ends with `mark_processed`.
 - README Security section now reflects keychain credential storage in place of the old `tokens.json` description.
+- The setup wizard now runs Webex sign-in in a popup it opens itself, and closes the popup once the `wmcp://` callback is exchanged for tokens, so the browser is no longer left on the idbroker page. `/api/oauth` streams NDJSON (`{auth_url}` first, then the result) when the page asks for a popup. If the popup is blocked, the old system-browser path is used. If a sign-in page cuts the opener link, the success screen says to close the window by hand. `OAuthProvider.AuthorizeWith` takes the URL-opening function; `Authorize` is unchanged.
 
 ### Fixed
 - The 0.1.0 entry listing an `add_reaction` tool was wrong: the tool was documented but never implemented.

@@ -499,23 +499,62 @@ async function submitOAuth() {
 
   const btn = document.getElementById('btn-oauth');
   setButtonLoading(btn, true);
-  showStatus('Opening browser for Webex authorization...', 'info');
+  showStatus('Opening Webex sign-in...', 'info');
+
+  // Open the popup now, inside the click, so it isn't blocked. The page can
+  // close a window it opened once sign-in finishes. If it is blocked anyway,
+  // the server falls back to opening the system browser.
+  const popup = window.open('about:blank', 'webex-auth', 'popup,width=520,height=720');
 
   try {
     const resp = await fetch('/api/oauth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret })
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, popup: !!popup })
     });
-    const data = await resp.json();
+
+    // NDJSON: an optional {auth_url} line, then the final result line.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '', data = null;
+    const handleLine = (line) => {
+      if (!line.trim()) return;
+      const msg = JSON.parse(line);
+      if (msg.auth_url) {
+        if (popup && !popup.closed) popup.location.href = msg.auth_url;
+        showStatus('Finish signing in to Webex in the popup window...', 'info');
+      } else {
+        data = msg;
+      }
+    };
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        handleLine(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+    }
+    handleLine(buf);
+
+    // closed is also true when a sign-in page cut the opener link; the user
+    // has to close that window themselves.
+    const closedByUs = popup && !popup.closed;
+    if (closedByUs) popup.close();
+    if (!data) data = { error: 'No response from setup server' };
+    const note = popup && !closedByUs ? ' You can close the sign-in window.' : '';
+
     if (data.error) {
       showStatus(data.error, 'error');
       setButtonLoading(btn, false);
     } else {
       const who = data.display_name ? data.display_name + ' (' + data.email + ')' : 'Webex account';
-      showSuccess('Connected as ' + who, data.config);
+      showSuccess('Connected as ' + who + '.' + note, data.config);
     }
   } catch (e) {
+    if (popup && !popup.closed) popup.close();
     showStatus('Connection error: ' + e.message, 'error');
     setButtonLoading(btn, false);
   }

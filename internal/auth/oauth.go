@@ -197,6 +197,13 @@ func WriteCallbackFile(code, state, errMsg string) error {
 // It opens the browser, then polls for the callback file written by the
 // wmcp:// protocol handler. No HTTP listener is used.
 func (p *OAuthProvider) Authorize(ctx context.Context) error {
+	return p.AuthorizeWith(ctx, openBrowser)
+}
+
+// AuthorizeWith is Authorize, but hands the authorization URL to open instead
+// of launching the system browser. The setup wizard uses it to load the URL
+// into a popup it can close once the callback arrives.
+func (p *OAuthProvider) AuthorizeWith(ctx context.Context, open func(authURL string) error) error {
 	verifier, err := generateCodeVerifier()
 	if err != nil {
 		return fmt.Errorf("generating PKCE verifier: %w", err)
@@ -239,7 +246,7 @@ func (p *OAuthProvider) Authorize(ctx context.Context) error {
 	fmt.Fprintf(os.Stderr, "\nOpening browser for Webex authorization...\n")
 	fmt.Fprintf(os.Stderr, "If the browser doesn't open, visit this URL:\n\n  %s\n\n", authURL)
 
-	_ = openBrowser(authURL)
+	_ = open(authURL)
 
 	// Poll for the callback file written by `webex-mcp --oauth-callback`.
 	ticker := time.NewTicker(callbackPollInterval)

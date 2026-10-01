@@ -115,6 +115,7 @@ type apiResponse struct {
 	Email       string `json:"email,omitempty"`
 	Config      string `json:"config,omitempty"`
 	Error       string `json:"error,omitempty"`
+	AuthURL     string `json:"auth_url,omitempty"`
 }
 
 func handlePAT(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +164,10 @@ func handlePAT(w http.ResponseWriter, r *http.Request) {
 type oauthRequest struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
+	// Popup means the page opened its own window for sign-in. The server then
+	// streams the authorization URL back as the first NDJSON line instead of
+	// opening the system browser, and the final result follows as the last.
+	Popup bool `json:"popup"`
 }
 
 func handleOAuth(binaryPath string) http.HandlerFunc {
@@ -211,7 +216,20 @@ func handleOAuth(binaryPath string) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 		defer cancel()
 
-		if err := provider.Authorize(ctx); err != nil {
+		authorize := provider.Authorize
+		if req.Popup {
+			authorize = func(ctx context.Context) error {
+				return provider.AuthorizeWith(ctx, func(authURL string) error {
+					writeJSON(w, apiResponse{AuthURL: authURL})
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					return nil
+				})
+			}
+		}
+
+		if err := authorize(ctx); err != nil {
 			writeJSON(w, apiResponse{Error: fmt.Sprintf("Authorization failed: %v", err)})
 			return
 		}
