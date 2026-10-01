@@ -1,0 +1,31 @@
+internal/setup/setup.html
+  s_e2e0e26e0d3516::t_fab545493901cb 554
+  s_e2e0e26e0d3516::t_de7a847da3b225 557
+  s_e2e0e26e0d3516::t_6021e9cd120c7d 502-507,513,515-546,548
+  s_e2e0e26e0d3516::t_01beaa72caf0aa 547
+internal/setup/setup.go
+  s_e2e0e26e0d3516::t_b4b4702a91022e 167-170
+  s_e2e0e26e0d3516::t_f5223f5a508595 219-232
+  s_e2e0e26e0d3516::t_0b768661941523 118
+CHANGELOG.md
+  s_e2e0e26e0d3516::t_e4f1f524347914 14
+internal/auth/oauth.go
+  s_e2e0e26e0d3516::t_04586d201bdad3 200-206
+  s_e2e0e26e0d3516::t_4c3f88ef0a7a48 249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "093f6674db8204a7d4367c9e35b351e5b8d9cdb1",
+  "prompts": {},
+  "sessions": {
+    "s_e2e0e26e0d3516": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ee07b2-2651-4be8-826f-556a564cbcef",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
