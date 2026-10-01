@@ -49,7 +49,7 @@ func loadPlaybook(name string) string {
 	playbookCache.mu.Unlock()
 
 	path := filepath.Join(playbookDir, name+".md")
-	f, err := os.Open(path) //nolint:gosec // path built from validated name
+	f, err := os.Open(path) // #nosec G304 -- name passed safeAgentName ([A-Za-z0-9_-]), so path stays under playbookDir
 	if err != nil {
 		return ""
 	}

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `send_message` and `reply_to_thread` take an optional `markdown` field, which Webex renders, alongside `text` as the plain-text fallback. Either may be sent alone, and both are length-checked and URL-filtered.
+- `share_file` uploads a local file to a space or thread with an optional `text` or `markdown` message, as `multipart/form-data` like the Webex Go SDK's `CreateWithAttachment`. It was a stub.
+
+### Security
+- `share_file` reads only regular files, not symlinks, up to 100 MB, under the working directory, the OS temp directory, or a directory in `WEBEX_SHARE_DIRS`. It refuses a path with a hidden component, such as `.ssh`, and key, credential, token, and `.env` file names, so a Webex message cannot talk the model into uploading a secret. Refusals are audit-logged.
+
 ## [0.9.5] - 2026-10-01
 
 ### Changed
