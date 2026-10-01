@@ -1,0 +1,19 @@
+internal/tools/playbooks.go
+  s_0e7b66647404de::t_59fd65c463b3c4 52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a4567f5ae6c537222f257ccf55bcb64c26aceedb",
+  "prompts": {},
+  "sessions": {
+    "s_0e7b66647404de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5c7f9cd1-2707-4e53-aaaa-edeb6a164c72",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
