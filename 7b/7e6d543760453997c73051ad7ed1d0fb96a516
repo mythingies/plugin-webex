@@ -1,0 +1,24 @@
+internal/setup/setup.go
+  s_e2e0e26e0d3516::t_ba55245fccfeea 25
+CHANGELOG.md
+  s_e2e0e26e0d3516::t_edbfe17fc86a01 26
+  s_e2e0e26e0d3516::t_c6202f1dff9cc0 10-11,13
+.claude-plugin/plugin.json
+  s_e2e0e26e0d3516::t_ba55245fccfeea 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7b7e6d543760453997c73051ad7ed1d0fb96a516",
+  "prompts": {},
+  "sessions": {
+    "s_e2e0e26e0d3516": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ee07b2-2651-4be8-826f-556a564cbcef",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
