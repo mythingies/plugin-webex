@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - The 0.1.0 entry listing an `add_reaction` tool was wrong: the tool was documented but never implemented.
+- `send_message`, `reply_to_thread` and `send_adaptive_card` no longer flatten outbound text. `sanitizeOutboundText` used to split on whitespace and rejoin with single spaces, which turned multi-line messages, lists, code blocks and pastes into one line. It now replaces disallowed URLs in place and leaves the rest of the text untouched.
+- Words ending in a colon (`Note:`, `Summary:`) are no longer replaced with `[blocked-url]`.
+
+### Security
+- Outbound URL filtering now also catches disallowed schemes embedded in other text, such as a Markdown link target `[x](javascript:…)`, which the old whitespace-token check let through.
 
 ## [0.9.4] - 2026-06-25
 

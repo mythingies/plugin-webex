@@ -2,7 +2,7 @@ package tools
 
 import (
 	"log/slog"
-	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -75,18 +75,23 @@ var allowedOutboundProtocols = map[string]bool{
 	"mailto": true,
 }
 
+// outboundSchemeRe matches a URI scheme followed by a non-empty body, anywhere
+// in the text (including inside Markdown link targets). A trailing colon with
+// nothing after it ("Note:") is not a URI, and single-letter schemes are left
+// alone so Windows drive paths survive.
+var outboundSchemeRe = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]+:\S+`)
+
 // sanitizeOutboundText validates outbound message text.
-// Strips URLs with disallowed protocols (e.g., javascript:, data:, wmcp://).
+// Replaces URLs with disallowed protocols (e.g., javascript:, data:, wmcp://)
+// in place, leaving all other text, including whitespace, untouched.
 func sanitizeOutboundText(text string) string {
-	words := strings.Fields(text)
-	for i, w := range words {
-		if u, err := url.Parse(w); err == nil && u.Scheme != "" {
-			if !allowedOutboundProtocols[strings.ToLower(u.Scheme)] {
-				words[i] = "[blocked-url]"
-			}
+	return outboundSchemeRe.ReplaceAllStringFunc(text, func(m string) string {
+		scheme := m[:strings.IndexByte(m, ':')]
+		if allowedOutboundProtocols[strings.ToLower(scheme)] {
+			return m
 		}
-	}
-	return strings.Join(words, " ")
+		return "[blocked-url]"
+	})
 }
 
 // toolRateLimiter provides per-tool rate limiting for drain operations.
