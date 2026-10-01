@@ -157,8 +157,8 @@ For OAuth, create an integration at [developer.webex.com/my-apps](https://develo
 |---|---|
 | `list_spaces` | List user's Webex spaces, sorted by recent activity |
 | `get_space_history` | Read recent messages from a space |
-| `send_message` | Send to a space, person, or thread |
-| `reply_to_thread` | Reply to a specific message thread |
+| `send_message` | Send text or Markdown to a space, person, or thread |
+| `reply_to_thread` | Reply to a specific message thread, in text or Markdown |
 | `get_users` | List members of a space |
 | `get_user_profile` | Look up a person's details |
 | `search_messages` | Cross-space full-text search |
@@ -173,6 +173,7 @@ For OAuth, create an integration at [developer.webex.com/my-apps](https://develo
 | `get_pending` | List messages still to process — a durable reminder that survives restarts |
 | `mark_processed` | Clear handled items from the pending list (local only; never signals senders) |
 | `send_adaptive_card` | Rich cards with tables, buttons, and inputs |
+| `share_file` | Upload a local file to a space or thread, from the working or temp directory or `WEBEX_SHARE_DIRS`; keys, credentials, and hidden paths are refused |
 | `get_space_analytics` | Message volume, active members, peak times |
 | `listener_control` | Start/stop/status of WebSocket listener |
 | `get_notification_routes` | Show agent routing configuration |

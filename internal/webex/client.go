@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -139,13 +140,23 @@ func (c *Client) GetMessages(roomID string, max int) ([]Message, error) {
 	return result.Items, nil
 }
 
-// SendMessage sends a message to a space, person, or thread.
-func (c *Client) SendMessage(roomID, toPersonID, toPersonEmail, parentID, text string) (*Message, error) {
+// SendMessage sends a message to a space, person, or thread. When markdown is set,
+// Webex renders it, and text is the fallback for clients without rich text.
+func (c *Client) SendMessage(roomID, toPersonID, toPersonEmail, parentID, text, markdown string) (*Message, error) {
 	if roomID == "" && toPersonID == "" && toPersonEmail == "" {
 		return nil, fmt.Errorf("at least one recipient required (roomID, toPersonID, or toPersonEmail)")
 	}
+	if text == "" && markdown == "" {
+		return nil, fmt.Errorf("text or markdown is required")
+	}
 
-	body := map[string]string{"text": text}
+	body := map[string]string{}
+	if text != "" {
+		body["text"] = text
+	}
+	if markdown != "" {
+		body["markdown"] = markdown
+	}
 	if roomID != "" {
 		body["roomId"] = roomID
 	}
@@ -300,9 +311,73 @@ func (c *Client) SendAdaptiveCard(roomID, toPersonEmail string, card interface{}
 	return &msg, nil
 }
 
-// ShareFile is a placeholder for file upload/share (multipart upload deferred).
-func (c *Client) ShareFile(roomID, filePath string) error {
-	return fmt.Errorf("share_file is not yet implemented (multipart upload deferred to a future version)")
+// MaxUploadSize is Webex's limit for the one file a message may carry.
+const MaxUploadSize = 100 << 20
+
+// uploadTimeout replaces the client's 30-second timeout for an upload, which may be up
+// to MaxUploadSize.
+const uploadTimeout = 5 * time.Minute
+
+// ShareFile posts data as a file named name to a space or thread, with optional text
+// or markdown, as multipart/form-data, as the Webex Go SDK's CreateWithAttachment does.
+func (c *Client) ShareFile(roomID, parentID, name string, data []byte, text, markdown string) (*Message, error) {
+	if roomID == "" {
+		return nil, fmt.Errorf("roomID is required")
+	}
+	if len(data) > MaxUploadSize {
+		return nil, fmt.Errorf("file is %d bytes, over the %d-byte limit", len(data), MaxUploadSize)
+	}
+	fields := [][2]string{{"roomId", roomID}}
+	for _, f := range [][2]string{{"parentId", parentID}, {"text", text}, {"markdown", markdown}} {
+		if f[1] != "" {
+			fields = append(fields, f)
+		}
+	}
+	body, contentType, err := multipartBody(fields, name, data)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := c.tokenProvider.Token()
+	if err != nil {
+		return nil, fmt.Errorf("getting access token: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/messages", body)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", contentType)
+
+	hc := *c.httpClient
+	hc.Timeout = uploadTimeout
+	var msg Message
+	if err := send(&hc, req, &msg); err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
+// multipartBody writes fields, then data as the "files" part named name.
+func multipartBody(fields [][2]string, name string, data []byte) (*bytes.Buffer, string, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for _, f := range fields {
+		if err := w.WriteField(f[0], f[1]); err != nil {
+			return nil, "", fmt.Errorf("writing field %s: %w", f[0], err)
+		}
+	}
+	part, err := w.CreateFormFile("files", name)
+	if err != nil {
+		return nil, "", fmt.Errorf("creating file part: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return nil, "", fmt.Errorf("writing file part: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, "", fmt.Errorf("closing multipart body: %w", err)
+	}
+	return &body, w.FormDataContentType(), nil
 }
 
 // GetSpaceAnalytics computes client-side analytics for a space over a time window.
@@ -519,8 +594,12 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	return send(c.httpClient, req, out)
+}
 
-	resp, err := c.httpClient.Do(req)
+// send runs req and decodes a 200 or 201 response into out.
+func send(hc *http.Client, req *http.Request, out interface{}) error {
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
