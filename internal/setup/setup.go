@@ -22,7 +22,7 @@ import (
 //go:embed setup.html
 var setupHTML embed.FS
 
-const version = "v1.0.0"
+const version = "v0.9.5"
 
 // Run starts the setup UI on a random localhost port and opens the browser.
 func Run(binaryPath string) error {
@@ -372,11 +372,11 @@ func openBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url) //nolint:gosec // trusted localhost URL
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url) // #nosec G204 -- url is our own 127.0.0.1 listener address
 	case "darwin":
-		cmd = exec.Command("open", url) //nolint:gosec // trusted localhost URL
+		cmd = exec.Command("open", url) // #nosec G204 -- url is our own 127.0.0.1 listener address
 	default:
-		cmd = exec.Command("xdg-open", url) //nolint:gosec // trusted localhost URL
+		cmd = exec.Command("xdg-open", url) // #nosec G204 -- url is our own 127.0.0.1 listener address
 	}
 	_ = cmd.Run()
 }
