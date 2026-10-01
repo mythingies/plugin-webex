@@ -1,0 +1,19 @@
+internal/setup/setup.go
+  s_e2e0e26e0d3516::t_7d091b5f51230a 375,377,379
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d37bb5c80f231e43a529fd711d1de6b5faf8f13a",
+  "prompts": {},
+  "sessions": {
+    "s_e2e0e26e0d3516": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4ee07b2-2651-4be8-826f-556a564cbcef",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "3copelan <3copelan@users.noreply.github.com>"
+    }
+  }
+}
