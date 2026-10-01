@@ -351,8 +351,12 @@ func (c *Client) ShareFile(roomID, parentID, name string, data []byte, text, mar
 
 	hc := *c.httpClient
 	hc.Timeout = uploadTimeout
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
 	var msg Message
-	if err := send(&hc, req, &msg); err != nil {
+	if err := decode(resp, &msg); err != nil {
 		return nil, err
 	}
 	return &msg, nil
@@ -594,15 +598,17 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	return send(c.httpClient, req, out)
-}
 
-// send runs req and decodes a 200 or 201 response into out.
-func send(hc *http.Client, req *http.Request, out interface{}) error {
-	resp, err := hc.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
+	return decode(resp, out)
+}
+
+// decode closes resp and decodes a 200 or 201 response into out. Each caller runs Do
+// itself on a URL built from baseURL, so the request target stays visibly constant.
+func decode(resp *http.Response, out interface{}) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
