@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `send_message` and `reply_to_thread` take an optional `markdown` field, which Webex renders, alongside `text` as the plain-text fallback. Either may be sent alone, and both are length-checked and URL-filtered.
 - `share_file` uploads a local file to a space or thread with an optional `text` or `markdown` message, as `multipart/form-data` like the Webex Go SDK's `CreateWithAttachment`. It was a stub.
+- `docs/adr/0001-local-index-daemon-and-agent-dispatch.md` (Accepted): split into a long-running indexing daemon and the per-session MCP server, with SQLite/FTS5 storage, rules in `agents/*.md` frontmatter, `claude -p` dispatch, and an external, opt-in knowledge layer (notegraph over MCP). The decisions rest on a 6-month backfill spike and an LLM-judged retrieval hit rate.
 
 ### Security
 - `share_file` reads only regular files, not symlinks, up to 100 MB, under the working directory, the OS temp directory, or a directory in `WEBEX_SHARE_DIRS`. It refuses a path with a hidden component, such as `.ssh`, and key, credential, token, and `.env` file names, so a Webex message cannot talk the model into uploading a secret. Refusals are audit-logged.
