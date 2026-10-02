@@ -24,6 +24,7 @@ make clean
 - Go version is pinned in `go.mod`; CI uses the matching `go-version` in `.github/workflows/*.yml`.
 - CI's test job runs `go test -race -coverprofile=coverage.out ./...` — run with `-race` locally before pushing concurrency changes (listener, buffer, triage, token refresh).
 - Lint is golangci-lint v2 (`.golangci.yml`): govet, errcheck, staticcheck, unused, ineffassign, **gosec**. goimports uses `local-prefixes: github.com/mythingies/plugin-webex`, so project imports go in their own group.
+- Suppress a gosec finding with `// #nosec G<rule> -- <reason>`. golangci-lint honors it, and standalone gosec does too; standalone gosec ignores `//nolint:gosec`, which older lines (mostly `internal/auth`) still use.
 - The Makefile has no `run` target. To exercise the server, build and point a `.mcp.json` (template: `.mcp.json.example`; the real `.mcp.json` is gitignored) at the binary.
 
 ### Binary subcommands (`cmd/webex-mcp/main.go`)
@@ -36,6 +37,12 @@ Checked as `os.Args[1]` before the server starts:
 
 With no subcommand it resolves auth, loads routing config from `WEBEX_AGENTS_CONFIG` (default `.webex-agents.yml`, relative to CWD; falls back to `router.DefaultConfig()` on missing/invalid), and serves MCP on stdio.
 
+### Releasing
+
+The version is hard-coded in two places with no ldflag injection: `"version"` in `.claude-plugin/plugin.json` and `const version` in `internal/setup/setup.go` (shown in the wizard). Keep both equal to the tag. Pushing a `v*` tag runs `release.yml`, which publishes the six platform archives, `checksums.txt`, and a CycloneDX `sbom.cdx.json`.
+
+`install.ps1` prompts with `Read-Host` (MCP server vs skill); non-interactively use `echo 1 | pwsh -File install.ps1 -Version vX.Y.Z`, or `-SkillOnly`. Windows won't overwrite a running `webex-mcp.exe` (each Claude Code session runs one), but it can be renamed aside first.
+
 ## Authentication
 
 `resolveAuth()` in `cmd/webex-mcp/main.go` picks the mode, in priority order:
@@ -45,6 +52,8 @@ With no subcommand it resolves auth, loads routing config from `WEBEX_AGENTS_CON
 3. **OAuth, keychain secret** — only `WEBEX_CLIENT_ID` set; secret read from the OS keychain. The normal end-user path written by `--setup`.
 
 OAuth is PKCE with auto-refresh. Everything implements `webex.TokenProvider`.
+
+The callback has no HTTP listener. Webex redirects to `wmcp://oauth-callback`. The OS handler registered by `RegisterProtocol` (on Windows, `wmcp-callback.vbs` beside the binary, run hidden) launches `webex-mcp --oauth-callback <url>`, which writes `oauth-callback.json` (0600) to the user config dir. `AuthorizeWith` polls that file, checks `state`, and exchanges the code. `Authorize` is `AuthorizeWith(openBrowser)`. The setup wizard instead posts `popup:true` to `/api/oauth`, which streams NDJSON: `{auth_url}` first, then the result. The page loads that URL into a window it opened during the click and closes it at the end. The `window.open` call must stay synchronous in the click handler or browsers block it.
 
 Credential storage (`internal/auth/`): access/refresh tokens and the client secret live in the OS keychain via `zalando/go-keyring` (service `webex-mcp`, accounts `oauth-tokens` and `oauth-client-secret-<clientID>`). `.mcp.json` holds only the non-secret client ID and binary path.
 - `keyringAvailable()` probes the backend; with no Secret Service (headless Linux, WSL, containers) it falls back to 0600 files in `~/.config/webex-mcp/`. On Windows the fallback file also gets an explicit ACL (`store_acl_windows.go`, icacls `/inheritance:r`); `store_acl_other.go` is the non-Windows stub.
@@ -84,7 +93,8 @@ Read-side semantics matter: `get_notifications`, `get_priority_inbox`, `get_ment
 These come from the MAESTRO threat model (`THREAT_MODEL.md`). New tools must follow them:
 - Wrap any Webex-sourced text in `sandboxText()` (`<external-message>…</external-message>`) as a prompt-injection guard.
 - Mask emails in output with `maskEmail()`.
-- Run outbound text through `sanitizeOutboundText()`, which only allows http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`). Enforce `maxMessageLen` (7439) and `maxCardJSONLen` (28000).
+- Run outbound text and markdown through `sanitizeOutboundText()`, which only allows http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`). It replaces any other `scheme:` match in place, including one embedded in a Markdown link, and must leave whitespace and newlines alone; it used to collapse them, flattening multi-line messages. Tests: `internal/tools/tools_test.go`. Enforce `maxMessageLen` (7439, checked on the raw input) and `maxCardJSONLen` (28000).
+- Local file reads that a Webex message could steer go through a root-restricted check like `readShareable()` in `share_file.go`: regular files only (no symlinks), under CWD, the OS temp dir, or `WEBEX_SHARE_DIRS`, refusing hidden path components and key/credential/`.env` names.
 - Call `auditLog()` for tool actions; drain-type tools are rate-limited (`toolRateInterval`).
 - Tokens must never be logged. stdout is the MCP channel, so all logging goes to stderr via `slog`.
 
