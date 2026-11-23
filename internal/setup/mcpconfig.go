@@ -2,11 +2,15 @@ package setup
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/mythingies/plugin-webex/internal/auth"
 )
@@ -40,6 +44,9 @@ type ConfigResult struct {
 	Path    string // absolute path of .mcp.json
 	Changed bool   // false when the existing entry was already correct
 	Display string // the written entry, secrets masked
+	// Warning is set when the write put a secret into a file that is
+	// likely shared (see secretWarning); it is also logged to stderr.
+	Warning string
 }
 
 // EnsureMCPConfig makes the current directory's .mcp.json point at this
@@ -144,22 +151,92 @@ func writeMCPConfig(authEnv map[string]string, existing []byte) (*ConfigResult, 
 		return nil, err
 	}
 
-	if changed {
-		if err := os.WriteFile(mcpConfigFile, merged, 0600); err != nil {
-			return nil, err
-		}
-		// On Windows, 0600 has no effect; strip inherited ACEs so other
-		// users on the machine can't read an embedded PAT.
-		if err := auth.RestrictFileAccess(mcpConfigFile); err != nil {
-			return nil, fmt.Errorf("locking %s ACL: %w", mcpConfigFile, err)
-		}
-	}
-
-	return &ConfigResult{
+	res := &ConfigResult{
 		Path:    absPath,
 		Changed: changed,
 		Display: displayEntry(exePath, authEnv),
-	}, nil
+	}
+	if changed {
+		if err := writeConfigFile(absPath, merged); err != nil {
+			return nil, err
+		}
+		if w := secretWarning(existing, authEnv); w != "" && !isGitIgnored() {
+			res.Warning = w
+			slog.Warn(w, "path", absPath)
+		}
+	}
+	return res, nil
+}
+
+// writeConfigFile replaces path with data through a 0600 temp file in the
+// same directory and a rename, so the result is owner-only even when an
+// existing file was world-readable (os.WriteFile keeps an existing file's
+// mode), and a crash never leaves a half-written config.
+func writeConfigFile(path string, data []byte) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), mcpConfigFile+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", mcpConfigFile, err)
+	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp) // best effort; the write already failed
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close() // the write error is the one to report
+		return fmt.Errorf("writing %s: %w", mcpConfigFile, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close() // the sync error is the one to report
+		return fmt.Errorf("writing %s: %w", mcpConfigFile, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("writing %s: %w", mcpConfigFile, err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return fmt.Errorf("restricting %s: %w", mcpConfigFile, err)
+	}
+	// On Windows, 0600 has no effect; strip inherited ACEs so other users on
+	// the machine can't read an embedded PAT. The rename keeps the ACL.
+	if err := auth.RestrictFileAccess(tmp); err != nil {
+		return fmt.Errorf("locking %s ACL: %w", mcpConfigFile, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replacing %s: %w", mcpConfigFile, err)
+	}
+	return nil
+}
+
+// secretWarning returns a warning when authEnv puts a Personal Access Token
+// into a .mcp.json that also configures other servers: such a file is often
+// shared or committed, and it now holds a secret.
+func secretWarning(existing []byte, authEnv map[string]string) string {
+	if authEnv["WEBEX_TOKEN"] == "" || len(existing) == 0 {
+		return ""
+	}
+	var root map[string]any
+	if json.Unmarshal(existing, &root) != nil {
+		return ""
+	}
+	servers, _ := root["mcpServers"].(map[string]any)
+	for name := range servers {
+		if name != mcpServerName {
+			return mcpConfigFile + " configures other servers and now also holds your Webex access token; do not commit or share it (add it to .gitignore, or use OAuth, which keeps secrets in the OS keychain)"
+		}
+	}
+	return ""
+}
+
+// isGitIgnored reports whether git ignores ./.mcp.json, in which case the
+// secretWarning is not needed. A variable so tests don't depend on the
+// directory they run in.
+var isGitIgnored = func() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Exit status 0 means ignored; anything else (not ignored, not a repo, no
+	// git) means warn.
+	return exec.CommandContext(ctx, "git", "check-ignore", "-q", "--", mcpConfigFile).Run() == nil
 }
 
 // mergeMCPConfig returns existing with mcpServers.webex set to command plus

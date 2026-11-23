@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mythingies/plugin-webex/internal/replydesk"
 	"github.com/mythingies/plugin-webex/internal/webex"
@@ -77,6 +79,13 @@ func parseLookback(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// closeTimeout bounds how long shutdown waits for background drafts to stop
+// and their temp dirs to be removed.
+const closeTimeout = 10 * time.Second
+
+// alreadyOpenMessage is shown when another --review process holds the store.
+const alreadyOpenMessage = "Reply Desk is already open in another window. Use that window, or close it and try again."
+
 // handleReview runs Reply Desk: the loopback review UI, or with --dry-run a
 // plain list of unanswered direct messages.
 func handleReview(args []string) {
@@ -90,18 +99,32 @@ func handleReview(args []string) {
 
 	client := webex.NewClient(resolveAuth())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	err = runReview(ctx, client, opts)
+	stop()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, reviewFailure(err))
+		os.Exit(1)
+	}
+}
 
+// reviewFailure is the line printed when --review fails.
+func reviewFailure(err error) string {
+	if errors.Is(err, replydesk.ErrAlreadyRunning) {
+		return alreadyOpenMessage
+	}
+	return "review: " + err.Error()
+}
+
+// runReview runs --review with the parsed options. It returns rather than
+// exiting so the service is always closed before the process ends.
+func runReview(ctx context.Context, client *webex.Client, opts reviewOptions) error {
 	if opts.dryRun {
-		if err := reviewDryRun(ctx, client, opts.lookback, os.Stdout); err != nil {
-			log.Fatalf("review: %v", err)
-		}
-		return
+		return reviewDryRun(ctx, client, opts.lookback, os.Stdout, os.Stderr)
 	}
 
 	storePath, err := replydesk.DefaultStorePath()
 	if err != nil {
-		log.Fatalf("review: %v", err)
+		return err
 	}
 	drafter := replydesk.NewDrafter(replydesk.DrafterConfig{Mode: opts.drafter, Model: opts.model})
 	svc, err := replydesk.NewService(replydesk.Config{
@@ -111,53 +134,121 @@ func handleReview(args []string) {
 		Lookback:  opts.lookback,
 	})
 	if err != nil {
-		log.Fatalf("review: %v", err)
+		return err
 	}
 	fmt.Fprintf(os.Stderr, "Reply Desk: drafter mode %q, looking back %s.\n", drafter.Mode(), opts.lookback)
-	if err := replydesk.Serve(ctx, svc, replydesk.ServeOptions{OpenBrowser: !opts.noBrowser}); err != nil {
-		log.Fatalf("review: %v", err)
+	serve := func(ctx context.Context) error {
+		return replydesk.Serve(ctx, svc, replydesk.ServeOptions{OpenBrowser: !opts.noBrowser})
 	}
+	return serveThenClose(ctx, serve, svc.Close, closeTimeout)
 }
 
-// reviewDryRun prints the pending bursts without drafting or serving.
-func reviewDryRun(ctx context.Context, client *webex.Client, lookback time.Duration, out io.Writer) error {
-	me, err := client.GetMe()
+// serveThenClose runs serve and then, whatever it returned, closeFn with a
+// fresh timeout. ctx is usually cancelled by then (Ctrl-C), and Close still
+// needs time to stop drafts and remove their temp dirs.
+func serveThenClose(ctx context.Context, serve, closeFn func(context.Context) error, timeout time.Duration) error {
+	serveErr := serve(ctx)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	var closeErr error
+	if err := closeFn(cctx); err != nil {
+		closeErr = fmt.Errorf("closing Reply Desk: %w", err)
+	}
+	return errors.Join(serveErr, closeErr)
+}
+
+// reviewDryRun prints the pending bursts without drafting or serving. Rooms
+// that failed are a warning on errOut. It fails only when the list can't be
+// trusted: the scan was rate limited or interrupted (after printing what it
+// found), or nothing is pending and the room listing itself failed.
+func reviewDryRun(ctx context.Context, api replydesk.API, lookback time.Duration, out, errOut io.Writer) error {
+	me, err := api.GetMe()
 	if err != nil {
 		return fmt.Errorf("identifying you (people/me): %w", err)
 	}
+	if me == nil || me.ID == "" {
+		return errors.New("identifying you (people/me): no person ID returned")
+	}
 	now := time.Now()
-	pending, err := replydesk.Scan(ctx, client, me.ID, lookback, now)
-	if err != nil && len(pending) == 0 {
+	pending, scanErr := replydesk.Scan(ctx, api, me.ID, lookback, now)
+	if scanErr == nil {
+		return writeDryRun(out, pending, now)
+	}
+	fatal := dryRunFatal(ctx, scanErr, len(pending))
+	if fatal && len(pending) == 0 {
+		// "No unanswered direct messages." would be a false all-clear.
+		return scanErr
+	}
+	if err := writeDryRun(out, pending, now); err != nil {
 		return err
 	}
-	writeDryRun(out, pending, now)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: some rooms could not be scanned: %v\n", err)
+	if fatal {
+		return fmt.Errorf("scan stopped early, so the list above may be incomplete: %w", scanErr)
 	}
-	return nil
+	_, err = io.WriteString(errOut, "warning: some rooms could not be scanned: "+terminalSafe(scanErr.Error())+"\n")
+	return err
 }
 
-// writeDryRun renders pending bursts for a terminal.
-func writeDryRun(out io.Writer, pending []replydesk.Pending, now time.Time) {
+// dryRunFatal reports whether a Scan error makes the result untrustworthy:
+// a rate limit or interruption stopped the scan, or nothing is pending and
+// the error is more than failed rooms (the room listing itself failed).
+func dryRunFatal(ctx context.Context, err error, pending int) bool {
+	if err == nil {
+		return false
+	}
+	var rl *webex.RateLimitError
+	if errors.As(err, &rl) || ctx.Err() != nil {
+		return true
+	}
+	return pending == 0 && !onlyRoomErrors(err)
+}
+
+// onlyRoomErrors reports whether err consists only of per-room failures.
+// replydesk.Scan joins those, each prefixed "room <id>: ", while a failed
+// room listing is prefixed "listing direct rooms: ". replydesk exposes no
+// typed error for the distinction.
+func onlyRoomErrors(err error) bool {
+	errs := []error{err}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		errs = j.Unwrap()
+	}
+	if len(errs) == 0 {
+		return false
+	}
+	for _, e := range errs {
+		if e == nil || !strings.HasPrefix(e.Error(), "room ") {
+			return false
+		}
+	}
+	return true
+}
+
+// writeDryRun renders pending bursts for a terminal in a single write.
+// Sender-controlled text (room titles, reasons, message text) goes through
+// terminalSafe.
+func writeDryRun(out io.Writer, pending []replydesk.Pending, now time.Time) error {
+	var b strings.Builder
 	if len(pending) == 0 {
-		fmt.Fprintln(out, "No unanswered direct messages.")
-		return
-	}
-	fmt.Fprintf(out, "%d direct message conversation(s) awaiting your reply:\n", len(pending))
-	for _, p := range pending {
-		fmt.Fprintf(out, "\n%s (%s ago)\n  %s\n", p.RoomTitle, now.Sub(p.HeadCreated).Round(time.Minute), p.Reason)
-		if len(p.Flags) > 0 {
-			fmt.Fprintf(out, "  flags: %s\n", strings.Join(p.Flags, ", "))
+		b.WriteString("No unanswered direct messages.\n")
+	} else {
+		fmt.Fprintf(&b, "%d direct message conversation(s) awaiting your reply:\n", len(pending))
+		for _, p := range pending {
+			fmt.Fprintf(&b, "\n%s (%s ago)\n  %s\n", terminalSafe(p.RoomTitle), now.Sub(p.HeadCreated).Round(time.Minute), terminalSafe(p.Reason))
+			if len(p.Flags) > 0 {
+				fmt.Fprintf(&b, "  flags: %s\n", terminalSafe(strings.Join(p.Flags, ", ")))
+			}
+			for _, m := range p.Burst {
+				fmt.Fprintf(&b, "  > %s\n", preview(m.Text, 120))
+			}
 		}
-		for _, m := range p.Burst {
-			fmt.Fprintf(out, "  > %s\n", preview(m.Text, 120))
-		}
 	}
+	_, err := io.WriteString(out, b.String())
+	return err
 }
 
-// preview flattens text to one line of at most n runes.
+// preview flattens text to one terminal-safe line of at most n runes.
 func preview(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = terminalSafe(s)
 	if s == "" {
 		return "[no text]"
 	}
@@ -166,4 +257,35 @@ func preview(s string, n int) string {
 		return string(r[:n-1]) + "…"
 	}
 	return s
+}
+
+// terminalSafe maps control characters (C0, DEL, and C1, so ESC and every
+// terminal escape sequence lose their introducer), line and paragraph
+// separators, and bidi controls to spaces, then collapses whitespace. The
+// result is one line that cannot move the cursor, recolor or retitle the
+// terminal, or reorder what the user reads.
+func terminalSafe(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || isBidiOrSeparator(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// isBidiOrSeparator reports the format characters terminalSafe removes:
+// U+2028 and U+2029, and the bidi marks, embeddings, overrides, and isolates.
+func isBidiOrSeparator(r rune) bool {
+	switch {
+	case r == 0x2028, r == 0x2029: // line and paragraph separators
+		return true
+	case r == 0x200E, r == 0x200F, r == 0x061C: // LRM, RLM, ALM
+		return true
+	case r >= 0x202A && r <= 0x202E: // LRE, RLE, PDF, LRO, RLO
+		return true
+	case r >= 0x2066 && r <= 0x2069: // LRI, RLI, FSI, PDI
+		return true
+	}
+	return false
 }

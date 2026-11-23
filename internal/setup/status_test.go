@@ -2,6 +2,7 @@ package setup
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -104,5 +105,58 @@ func TestEvalExistingAuth_CarriesClientID(t *testing.T) {
 		if got == nil || got.ClientID != "cid" {
 			t.Errorf("access expiry %v: ClientID not carried through: %+v", access, got)
 		}
+	}
+}
+
+type fakeTokenStore struct{ err error }
+
+func (f *fakeTokenStore) Delete() error { return f.err }
+
+func TestLogout_PurgesReplyDeskEvenWhenTokenDeleteFails(t *testing.T) {
+	deleteErr := errors.New("keychain locked")
+	purgeErr := errors.New("file in use")
+	cases := []struct {
+		name     string
+		newStore func() (tokenDeleter, error)
+		purge    error
+		want     []error
+	}{
+		{
+			name:     "delete fails",
+			newStore: func() (tokenDeleter, error) { return &fakeTokenStore{err: deleteErr}, nil },
+			want:     []error{deleteErr},
+		},
+		{
+			name:     "store fails",
+			newStore: func() (tokenDeleter, error) { return nil, deleteErr },
+			want:     []error{deleteErr},
+		},
+		{
+			name:     "both fail",
+			newStore: func() (tokenDeleter, error) { return &fakeTokenStore{err: deleteErr}, nil },
+			purge:    purgeErr,
+			want:     []error{deleteErr, purgeErr},
+		},
+		{
+			name:     "tokens already gone",
+			newStore: func() (tokenDeleter, error) { return &fakeTokenStore{err: os.ErrNotExist}, nil },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			purged := false
+			err := logout(tc.newStore, func() error { purged = true; return tc.purge })
+			if !purged {
+				t.Error("Reply Desk state was not purged")
+			}
+			if len(tc.want) == 0 && err != nil {
+				t.Errorf("err = %v, want nil", err)
+			}
+			for _, w := range tc.want {
+				if !errors.Is(err, w) {
+					t.Errorf("err = %v, want it to include %v", err, w)
+				}
+			}
+		})
 	}
 }
