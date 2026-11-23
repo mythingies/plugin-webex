@@ -1,16 +1,26 @@
 package tools
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	pluginwebex "github.com/mythingies/plugin-webex"
 )
 
 // playbookDir is the directory holding per-agent markdown playbooks,
 // resolved relative to the process working directory.
 const playbookDir = "agents"
+
+// builtinPlaybooks holds the playbooks shipped with the plugin, used when
+// agents/<name>.md is absent from the working directory. A file on disk
+// always wins, so users can override or blank out a shipped playbook.
+// Tests swap it out.
+var builtinPlaybooks fs.FS = pluginwebex.Playbooks
 
 // maxPlaybookSize caps each playbook to keep tool results sane.
 const maxPlaybookSize = 4 * 1024
@@ -31,7 +41,8 @@ var playbookCache = struct {
 	m  map[string]string
 }{m: make(map[string]string)}
 
-// loadPlaybook returns the contents of agents/<name>.md, or "" if missing,
+// loadPlaybook returns the contents of agents/<name>.md from the working
+// directory, else the built-in copy, or "" if neither exists, it is
 // unreadable, or the name is rejected by the safety guard. Results are cached.
 func loadPlaybook(name string) string {
 	if name == "" {
@@ -48,8 +59,7 @@ func loadPlaybook(name string) string {
 	}
 	playbookCache.mu.Unlock()
 
-	path := filepath.Join(playbookDir, name+".md")
-	f, err := os.Open(path) // #nosec G304 -- name passed safeAgentName ([A-Za-z0-9_-]), so path stays under playbookDir
+	f, err := openPlaybook(name)
 	if err != nil {
 		return ""
 	}
@@ -67,6 +77,22 @@ func loadPlaybook(name string) string {
 	playbookCache.mu.Unlock()
 
 	return content
+}
+
+// openPlaybook opens agents/<name>.md from the working directory, falling
+// back to the built-in copy only when the file does not exist there. name
+// must already have passed safeAgentName.
+func openPlaybook(name string) (io.ReadCloser, error) {
+	path := filepath.Join(playbookDir, name+".md")
+	f, err := os.Open(path) // #nosec G304 -- name passed safeAgentName ([A-Za-z0-9_-]), so path stays under playbookDir
+	if err == nil {
+		return f, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	// embed.FS paths always use forward slashes.
+	return builtinPlaybooks.Open(playbookDir + "/" + name + ".md")
 }
 
 // safeAgentName rejects anything that could escape the agents/ directory

@@ -88,3 +88,21 @@ func TestEvalExistingAuth(t *testing.T) {
 		})
 	}
 }
+
+func TestEvalExistingAuth_CarriesClientID(t *testing.T) {
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+	ok := func(string) (string, string, error) { return "Ada", "", nil }
+
+	for _, access := range []time.Time{future, now.Add(-time.Hour)} {
+		got := evalExistingAuth(&auth.StoredTokens{
+			AccessToken:           "tok",
+			AccessTokenExpiresAt:  access,
+			RefreshTokenExpiresAt: future,
+			ClientID:              "cid",
+		}, now, ok)
+		if got == nil || got.ClientID != "cid" {
+			t.Errorf("access expiry %v: ClientID not carried through: %+v", access, got)
+		}
+	}
+}

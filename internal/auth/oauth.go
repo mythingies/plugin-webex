@@ -400,6 +400,7 @@ func (p *OAuthProvider) doTokenRequest(data url.Values) error {
 		RefreshToken:          tokenResp.RefreshToken,
 		AccessTokenExpiresAt:  now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		RefreshTokenExpiresAt: now.Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second),
+		ClientID:              p.config.ClientID,
 	}
 
 	if err := p.store.Save(p.tokens); err != nil {

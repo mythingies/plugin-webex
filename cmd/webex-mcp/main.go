@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,14 +84,35 @@ func hasFlag(flag string) bool {
 
 // handleSetup launches the browser-based setup UI, but first checks whether a
 // usable OAuth session already exists. If so (and --force was not passed), it
-// tells the user they're already signed in and exits without opening a browser
-// — re-authenticating only on explicit request. This avoids the confusing case
-// where --setup pushes the user through a redundant (and sometimes stalling)
-// browser OAuth flow even though their stored tokens are already valid.
+// skips the redundant browser flow and only makes sure ./.mcp.json registers
+// this binary. Running --setup in a new directory therefore enables the server
+// there, and rerunning it repairs a stale binary path. The wizard still opens
+// when no client secret is stored for the session's client ID.
 func handleSetup(force bool) {
 	if !force {
 		if existing := setup.CurrentAuth(); existing != nil {
 			printAlreadyAuthed(existing)
+			res, err := setup.EnsureMCPConfig(existing)
+			switch {
+			case errors.Is(err, setup.ErrNoClientID):
+				fmt.Fprintln(os.Stderr, "\n  Couldn't tell which OAuth client ID this session belongs to, so .mcp.json was not written.")
+				fmt.Fprintln(os.Stderr, "  Rerun with WEBEX_CLIENT_ID set, or run `webex-mcp --setup --force`.")
+				printAuthCommands()
+				os.Exit(1)
+			case errors.Is(err, setup.ErrNoClientSecret):
+				fmt.Fprintln(os.Stderr, "\n  No client secret is stored for this client ID. Opening setup to collect it...")
+				runSetup()
+				return
+			case err != nil:
+				log.Fatalf("setup: %v", err)
+			}
+			if res.Changed {
+				fmt.Fprintf(os.Stderr, "\n  Wrote %s\n", res.Path)
+			} else {
+				fmt.Fprintf(os.Stderr, "\n  %s is already up to date.\n", res.Path)
+			}
+			fmt.Fprintf(os.Stderr, "  Start Claude Code from %s (or reload it there) to use the webex server.\n", filepath.Dir(res.Path))
+			printAuthCommands()
 			return
 		}
 	}
@@ -135,13 +158,20 @@ func printAlreadyAuthed(e *setup.ExistingAuth) {
 		fmt.Fprintf(os.Stderr, "\n✓ Already authenticated (stored session is valid)\n")
 	}
 	if !e.AccessExpires.IsZero() {
-		fmt.Fprintf(os.Stderr, "  Access token valid until %s", e.AccessExpires.Format("2006-01-02 15:04 MST"))
+		if time.Now().Before(e.AccessExpires) {
+			fmt.Fprintf(os.Stderr, "  Access token valid until %s", e.AccessExpires.Format("2006-01-02 15:04 MST"))
+		} else {
+			fmt.Fprint(os.Stderr, "  Access token expired (renewed automatically on next launch)")
+		}
 		if !e.RefreshExpires.IsZero() {
 			fmt.Fprintf(os.Stderr, "; refresh until %s", e.RefreshExpires.Format("2006-01-02"))
 		}
 		fmt.Fprintln(os.Stderr)
 	}
-	fmt.Fprintln(os.Stderr, "\n  Nothing to do — reload Claude Code to start using it.")
+}
+
+// printAuthCommands lists the account-management subcommands.
+func printAuthCommands() {
 	fmt.Fprintln(os.Stderr, "\n  To sign in as a different Webex account:  webex-mcp --switch")
 	fmt.Fprintln(os.Stderr, "  To force re-authentication (same account): webex-mcp --setup --force")
 	fmt.Fprintln(os.Stderr, "  To sign out without re-authenticating:    webex-mcp --logout")

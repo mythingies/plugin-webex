@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -79,18 +79,16 @@ func handleDetect(w http.ResponseWriter, r *http.Request) {
 	// client_id.
 	switch {
 	case clientID != "" && clientSecret != "":
-		masked := clientID[:4] + "..." + clientID[len(clientID)-4:]
 		writeJSON(w, detectResponse{
 			Mode:     "oauth",
-			ClientID: masked,
+			ClientID: maskValue(clientID),
 			Message:  "OAuth credentials loaded from environment",
 		})
 	case clientID != "":
 		if _, err := auth.LoadClientSecret(clientID); err == nil {
-			masked := clientID[:4] + "..." + clientID[len(clientID)-4:]
 			writeJSON(w, detectResponse{
 				Mode:     "oauth",
-				ClientID: masked,
+				ClientID: maskValue(clientID),
 				Message:  "OAuth credentials loaded (client_id from environment, secret from keychain)",
 			})
 			return
@@ -148,7 +146,7 @@ func handlePAT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config, err := writeMCPConfig("pat", token, "", "")
+	config, err := saveMCPConfig(patEnv(token))
 	if err != nil {
 		writeJSON(w, apiResponse{Error: fmt.Sprintf("Failed to save config: %v", err)})
 		return
@@ -197,9 +195,13 @@ func handleOAuth(binaryPath string) http.HandlerFunc {
 			return
 		}
 
-		// Register protocol handler.
+		// Register the wmcp:// handler so the OAuth redirect reaches us.
+		// Without it the callback never arrives and Authorize waits out its
+		// timeout, so say why up front.
 		if binaryPath != "" {
-			_ = auth.RegisterProtocol(binaryPath)
+			if err := auth.RegisterProtocol(binaryPath); err != nil {
+				slog.Warn("could not register wmcp:// protocol handler; the OAuth callback may not arrive", "error", err)
+			}
 		}
 
 		cfg := auth.OAuthConfig{
@@ -241,29 +243,18 @@ func handleOAuth(binaryPath string) http.HandlerFunc {
 			return
 		}
 
-		// Validate the token to get user info.
-		token, err := provider.Token()
-		if err == nil {
-			name, email, _ := validateToken(token)
-			config, err := writeMCPConfig("oauth", "", clientID, "")
-			if err != nil {
-				writeJSON(w, apiResponse{Error: fmt.Sprintf("Failed to save config: %v", err)})
-				return
-			}
-			writeJSON(w, apiResponse{
-				DisplayName: name,
-				Email:       email,
-				Config:      config,
-			})
-			return
-		}
-
-		config, err := writeMCPConfig("oauth", "", clientID, "")
+		config, err := saveMCPConfig(oauthEnv(clientID))
 		if err != nil {
 			writeJSON(w, apiResponse{Error: fmt.Sprintf("Failed to save config: %v", err)})
 			return
 		}
-		writeJSON(w, apiResponse{Config: config})
+
+		// Validate the token to get user info; the config is written either way.
+		resp := apiResponse{Config: config}
+		if token, err := provider.Token(); err == nil {
+			resp.DisplayName, resp.Email, _ = validateToken(token)
+		}
+		writeJSON(w, resp)
 	}
 }
 
@@ -301,64 +292,6 @@ func validateToken(token string) (displayName, email string, err error) {
 		emailStr = result.Emails[0]
 	}
 	return result.DisplayName, emailStr, nil
-}
-
-func writeMCPConfig(mode, token, clientID, _ string) (string, error) {
-	exe, _ := os.Executable()
-	exePath, _ := filepath.Abs(exe)
-
-	env := map[string]string{}
-	switch mode {
-	case "pat":
-		env["WEBEX_TOKEN"] = token
-	case "oauth":
-		// Client secret is stored in the OS keychain, never in .mcp.json.
-		env["WEBEX_CLIENT_ID"] = clientID
-	}
-
-	config := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"webex": map[string]interface{}{
-				"command": exePath,
-				"env":     env,
-			},
-		},
-	}
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return "", err
-	}
-
-	if err := os.WriteFile(".mcp.json", data, 0600); err != nil {
-		return "", err
-	}
-	// On Windows, 0600 has no effect — strip inherited ACEs so other
-	// users on the machine can't read the embedded client_secret.
-	if err := auth.RestrictFileAccess(".mcp.json"); err != nil {
-		return "", fmt.Errorf("locking .mcp.json ACL: %w", err)
-	}
-
-	// Display version with masked secrets.
-	displayEnv := map[string]string{}
-	for k, v := range env {
-		if len(v) > 8 {
-			displayEnv[k] = v[:4] + "..." + v[len(v)-4:]
-		} else {
-			displayEnv[k] = "****"
-		}
-	}
-
-	displayConfig := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"webex": map[string]interface{}{
-				"command": exePath,
-				"env":     displayEnv,
-			},
-		},
-	}
-	display, _ := json.MarshalIndent(displayConfig, "", "  ")
-	return string(display), nil
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	pluginwebex "github.com/mythingies/plugin-webex"
 )
 
 // maxConfigSize limits config file size to prevent parsing abuse.
@@ -52,6 +54,11 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config %s: %w", resolved, err)
 	}
 
+	return parseConfig(data)
+}
+
+// parseConfig parses, defaults, and validates a .webex-agents.yml body.
+func parseConfig(data []byte) (*Config, error) {
 	if len(data) > maxConfigSize {
 		return nil, fmt.Errorf("config file too large (%d bytes, max %d)", len(data), maxConfigSize)
 	}
@@ -145,4 +152,16 @@ func DefaultConfig() *Config {
 			PriorityLevels: []string{"critical", "high", "medium", "low"},
 		},
 	}
+}
+
+// BuiltinConfig returns the .webex-agents.yml shipped with the plugin
+// (embedded in the binary), used when no config file exists in the working
+// directory. It falls back to DefaultConfig if the embedded copy is invalid,
+// which TestBuiltinConfig guards against.
+func BuiltinConfig() *Config {
+	cfg, err := parseConfig(pluginwebex.DefaultRoutes)
+	if err != nil {
+		return DefaultConfig()
+	}
+	return cfg
 }

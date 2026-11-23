@@ -92,6 +92,14 @@ This opens a browser-based setup UI where you can choose:
 
 The wizard validates your credentials, writes `.mcp.json`, and registers the `wmcp://` protocol handler automatically.
 
+`.mcp.json` is written to the directory you run `--setup` from, so the server loads only for Claude Code sessions started there. To use Webex from a dedicated folder, run setup inside it:
+
+```bash
+mkdir -p ~/webex && cd ~/webex && webex-mcp --setup
+```
+
+If you're already signed in, `--setup` skips the browser and just writes or repairs `.mcp.json` in the current directory: it points the entry at the installed binary and keeps any other servers in the file. Sessions created before v0.9.6 don't record their OAuth client ID, so the first time, run it as `WEBEX_CLIENT_ID=<id> webex-mcp --setup` or from a directory whose `.mcp.json` already names the ID.
+
 Claude Code launches the server over stdio when it detects the `.mcp.json` config.
 
 #### Manual Configuration
@@ -239,7 +247,7 @@ Claude Code launches the server process and communicates over stdin/stdout using
 
 ### Agent Routing
 
-Inbound messages (via WebSocket) are routed to agents based on `.webex-agents.yml`. Routes are evaluated top-to-bottom; first match wins.
+Inbound messages (via WebSocket) are routed to agents based on `.webex-agents.yml` in the working directory (or `WEBEX_AGENTS_CONFIG`). Routes are evaluated top-to-bottom; first match wins. If the file is absent, the routes shipped with the plugin (the example below) are built into the binary and used instead. If it exists but is invalid, no routes are used and a warning is logged.
 
 ```yaml
 routes:
@@ -300,8 +308,11 @@ Notes:
 - Each playbook is capped at 4 KB to keep tool results reasonable.
 - Agent names are validated (`a-z 0-9 - _`) and resolved relative to the
   working directory; path traversal is rejected.
-- Missing playbooks are silently skipped — the routing config and the
-  `agents/` files are independent.
+- The playbooks shipped in this repo's `agents/` are built into the binary.
+  A file in the working directory's `agents/` overrides the built-in copy of
+  the same name.
+- Playbooks missing from both are silently skipped — the routing config and
+  the `agents/` files are independent.
 - Multiple rooms can route to the same agent without duplicating playbook
   content.
 

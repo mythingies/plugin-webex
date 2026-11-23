@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 
@@ -26,27 +28,11 @@ type Server struct {
 }
 
 // New creates a new MCP server wired to Webex tools.
-// configPath points to .webex-agents.yml; if empty or missing, defaults are used.
+// configPath points to .webex-agents.yml; see loadRoutingConfig.
 func New(provider webex.TokenProvider, configPath string) (*Server, error) {
 	client := webex.NewClient(provider)
 
-	// Load routing config (optional).
-	var cfg *router.Config
-	if configPath != "" {
-		if _, err := os.Stat(configPath); err == nil {
-			loaded, err := router.LoadConfig(configPath)
-			if err != nil {
-				slog.Warn("failed to load agent config, using defaults", "path", configPath, "error", err)
-				cfg = router.DefaultConfig()
-			} else {
-				cfg = loaded
-			}
-		} else {
-			cfg = router.DefaultConfig()
-		}
-	} else {
-		cfg = router.DefaultConfig()
-	}
+	cfg := loadRoutingConfig(configPath)
 
 	buf := buffer.New(cfg.Settings.BufferSize)
 	rtr := router.NewRouter(cfg, configPath)
@@ -89,4 +75,25 @@ func (s *Server) Start(ctx context.Context) error {
 // MCPServer returns the underlying MCP server for testing.
 func (s *Server) MCPServer() *mcpserver.MCPServer {
 	return s.mcp
+}
+
+// loadRoutingConfig loads the agent routing config. Only a file that does not
+// exist (or an empty path) gets the built-in routes shipped with the plugin.
+// A file that exists but can't be read or parsed gets defaults with no
+// routes, so a broken user config is never silently replaced by the sample
+// routes.
+func loadRoutingConfig(configPath string) *router.Config {
+	if configPath == "" {
+		return router.BuiltinConfig()
+	}
+	if _, err := os.Stat(configPath); errors.Is(err, fs.ErrNotExist) {
+		slog.Info("no agent config found, using built-in routes", "path", configPath)
+		return router.BuiltinConfig()
+	}
+	cfg, err := router.LoadConfig(configPath)
+	if err != nil {
+		slog.Warn("failed to load agent config, routing disabled", "path", configPath, "error", err)
+		return router.DefaultConfig()
+	}
+	return cfg
 }
