@@ -13,6 +13,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -70,10 +72,19 @@ func check() string {
 	if !hasPair(args, "--tools", "") {
 		return "tools_not_empty"
 	}
-	for _, flag := range []string{"-p", "--bare", "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"} {
+	for _, flag := range []string{"-p", "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands"} {
 		if !has(args, flag) {
 			return "missing" + strings.ReplaceAll(flag, "-", "_")
 		}
+	}
+	// Bare mode skips CLAUDE.md and settings discovery itself; isolated
+	// mode must load user settings only.
+	if has(args, "--bare") {
+		if has(args, "--setting-sources") {
+			return "bare_with_setting_sources"
+		}
+	} else if !hasPair(args, "--setting-sources", "user") {
+		return "isolated_without_setting_sources_user"
 	}
 	if !hasPair(args, "--output-format", "json") {
 		return "output_format"
@@ -105,6 +116,21 @@ func check() string {
 	if err != nil || len(entries) != 2 {
 		return "cwd_not_private"
 	}
+	// The work dir sits in the private per-user drafts root, not in the
+	// shared OS temp dir where anyone can plant a CLAUDE.md.
+	root := filepath.Dir(wd)
+	if filepath.Base(root) != "drafts" || filepath.Base(filepath.Dir(root)) != "webex-mcp" {
+		return "cwd_not_in_drafts_root"
+	}
+	if sameDir(root, os.TempDir()) {
+		return "cwd_in_shared_temp"
+	}
+	if runtime.GOOS != "windows" {
+		fi, err := os.Stat(root) // #nosec G703 -- test helper; path is its own cwd's parent
+		if err != nil || fi.Mode().Perm() != 0o700 {
+			return "drafts_root_not_0700"
+		}
+	}
 
 	stdin, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -117,8 +143,19 @@ func check() string {
 	if strings.Contains(in, "do-not-leak") {
 		return "secret_in_prompt"
 	}
+	if name := os.Getenv("ANTHROPIC_FAKE_NAME"); name != "" {
+		if !strings.Contains(in, "<external-message>"+name+"</external-message>") {
+			return "name_not_sandboxed"
+		}
+		if strings.Contains(sandboxRe.ReplaceAllString(in, ""), name) {
+			return "name_outside_sandbox"
+		}
+	}
 	return ""
 }
+
+// sandboxRe matches one <external-message> span.
+var sandboxRe = regexp.MustCompile(`(?s)<external-message>.*?</external-message>`)
 
 func sameDir(a, b string) bool {
 	ai, err := os.Stat(a) // #nosec G703 -- test helper; paths come from its own argv
