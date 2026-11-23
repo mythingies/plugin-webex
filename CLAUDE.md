@@ -34,6 +34,7 @@ Checked as `os.Args[1]` before the server starts:
 - `--switch` — clear stored OAuth tokens, then run setup for a different account (client secret is kept).
 - `--logout` — clear stored OAuth tokens only.
 - `--register-protocol` / `--oauth-callback <url>` — register and handle the `wmcp://oauth-callback` URI scheme used by the PKCE flow.
+- `--review [--dry-run] [--lookback 7d] [--drafter auto|bare|isolated|off] [--model m] [--no-browser]` — Reply Desk (`cmd/webex-mcp/review.go` → `internal/replydesk`; see below). `--logout`/`--switch` also call `replydesk.Purge()`.
 
 With no subcommand it resolves auth, loads routing config from `WEBEX_AGENTS_CONFIG` (default `.webex-agents.yml`, relative to CWD). A missing file falls back to `router.BuiltinConfig()`, the repo's `.webex-agents.yml` embedded by the root package `embed.go`. An invalid file falls back to `router.DefaultConfig()`, which has no routes, so a broken user config is never silently swapped for the sample routes. Then it serves MCP on stdio.
 
@@ -88,12 +89,21 @@ Read-side semantics matter: `get_notifications`, `get_priority_inbox`, `get_ment
 
 `get_notifications`, `get_priority_inbox`, and `get_mentions` (not `get_pending`) call `renderPlaybooks()` to inline `agents/<agent>.md` for each distinct routed agent into the tool result. Paths resolve **relative to the process CWD** (`playbookDir = "agents"`). Only when the file doesn't exist there does it fall back to the copy embedded from the repo's `agents/` (`pluginwebex.Playbooks`; tests swap `builtinPlaybooks`). Playbooks are capped at 4 KB each, cached, and silently skipped if missing from both. `TestBuiltinConfig` requires every built-in route's agent to have an embedded playbook. Agent names are validated against `[A-Za-z0-9_-]`. That allowlist is intentionally duplicated from `router/config.go` so the tools package does not import router. Keep the two in sync.
 
-### Security invariants in `internal/tools/tools.go`
+### Reply Desk (`internal/replydesk`, ADR 0002)
+
+`webex-mcp --review` is a separate process, not part of the MCP server. It finds 1:1 DMs where the other person wrote since the user's last message (the "burst"), drafts replies, and serves a loopback review page. `types.go` is the contract between the package's parts and `web/app.js`; change it deliberately. Authority is split:
+- **Read:** `Scan` / `Detect` (pure, tested without HTTP) and grounding issue only GETs. `invariant_test.go` records every request against an httptest Webex and asserts this, plus that the one `POST /messages` happens only on Send.
+- **Draft:** `drafter.go` runs `claude -p` with `--tools ""`, `--strict-mcp-config` with an empty config, `--no-session-persistence`, a temp cwd, the prompt on stdin, and an env allowlist with no `WEBEX_*`. `--bare` is used when an API key or Bedrock/Vertex/Foundry is configured, because under `--bare` the CLI never reads the subscription login. The model sees local refs (`b1`, `c2`, `p3`), never Webex IDs. The system prompt is `prompts/drafter.md`. Retrieval (`Rank`, BM25 + density gate) is limited to the user's own messages in the same DM.
+- **Send:** only `Service.Send`, after the user confirms. It checks, in order: state, empty text, SHA-256 of the confirmed text, `[[FILL` placeholders, byte length, `Sanitize` diff (needs `ack_sanitized`), rate limit, then a live re-check (ask deleted or edited, already replied, new messages). The target comes from the scan. A failed POST becomes `send_unknown` and is never retried.
+- **Server** (`server.go`): `127.0.0.1:0`; a single-use launch token becomes an HttpOnly SameSite=Strict cookie; exact `Host` on every request; exact `Origin`, `Sec-Fetch-Site`, CSRF header (`X-ReplyDesk-CSRF`) and JSON-only bodies on POST; strict CSP, so `web/` must not use inline scripts, inline styles or `innerHTML` for data; idle and lifetime shutdown; never writes to stdout.
+- **State:** `store.go`, `replydesk.json` in the config dir (0600 + ACL, owner-bound, pruned after 30 days, purged on logout). Records are keyed by room and carry the burst head they apply to, so a new message re-opens a dismissed room.
+
+### Security invariants (`internal/safetext`, `internal/tools/tools.go`)
 
 These come from the MAESTRO threat model (`THREAT_MODEL.md`). New tools must follow them:
-- Wrap any Webex-sourced text in `sandboxText()` (`<external-message>…</external-message>`) as a prompt-injection guard.
+- Wrap any Webex-sourced text in `safetext.Sandbox()` (`<external-message>…</external-message>`) as a prompt-injection guard. It neutralizes opening and closing wrapper tags inside the text (F19); sandbox *before* truncating, so a cut can't leave a partial tag behind.
 - Mask emails in output with `maskEmail()`.
-- Run outbound text and markdown through `sanitizeOutboundText()`, which only allows http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`). It replaces any other `scheme:` match in place, including one embedded in a Markdown link, and must leave whitespace and newlines alone; it used to collapse them, flattening multi-line messages. Tests: `internal/tools/tools_test.go`. Enforce `maxMessageLen` (7439, checked on the raw input) and `maxCardJSONLen` (28000).
+- Run outbound text and markdown through `safetext.Prepare` / `safetext.Sanitize`. These allow only http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`), replace any other `scheme:` match in place (including one inside a Markdown link, and `<@personEmail:…>` mentions), turn `<@all>` into `[blocked-mention]`, and leave whitespace and newlines alone. Tests: `internal/safetext/safetext_test.go`. Enforce `safetext.MaxMessageLen` (7439 bytes, checked on the raw input) and `maxCardJSONLen` (28000).
 - Local file reads that a Webex message could steer go through a root-restricted check like `readShareable()` in `share_file.go`: regular files only (no symlinks), under CWD, the OS temp dir, or `WEBEX_SHARE_DIRS`, refusing hidden path components and key/credential/`.env` names.
 - Call `auditLog()` for tool actions; drain-type tools are rate-limited (`toolRateInterval`).
 - Tokens must never be logged. stdout is the MCP channel, so all logging goes to stderr via `slog`.
