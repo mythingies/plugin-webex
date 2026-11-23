@@ -3,12 +3,14 @@ package webex
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,7 +19,9 @@ import (
 // This prevents a compromised DNS from steering the token to non-API paths.
 var allowedRedirectPathPrefixes = []string{"/v1/"}
 
-const baseURL = "https://webexapis.com/v1"
+// defaultBaseURL is the production Webex REST API. Requests go to Client.baseURL,
+// which is this unless NewClientWithBaseURL set another.
+const defaultBaseURL = "https://webexapis.com/v1"
 
 // maxResponseSize limits API response bodies to 50MB to prevent OOM.
 const maxResponseSize = 50 * 1024 * 1024
@@ -32,16 +36,24 @@ type TokenProvider interface {
 type Client struct {
 	tokenProvider TokenProvider
 	httpClient    *http.Client
+	baseURL       string                // API root without a trailing slash, e.g. https://webexapis.com/v1
+	sleep         func(d time.Duration) // waits out a short Retry-After; tests replace it
 }
 
 // NewClient creates a new Webex API client with security-hardened defaults.
 func NewClient(provider TokenProvider) *Client {
+	return newClient(provider, defaultBaseURL)
+}
+
+func newClient(provider TokenProvider, base string) *Client {
 	if provider == nil {
 		panic("webex.NewClient: TokenProvider must not be nil")
 	}
 
 	return &Client{
 		tokenProvider: provider,
+		baseURL:       base,
+		sleep:         time.Sleep,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -238,40 +250,126 @@ func readLimitedBody(body io.Reader) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(body, maxResponseSize))
 }
 
-// get performs an authenticated GET request.
+// get performs an authenticated GET request on an API path such as "/rooms".
 func (c *Client) get(path string, params url.Values, out interface{}) error {
-	u := baseURL + path
-	if params != nil {
+	_, err := c.getHeaders(c.apiURL(path, params), out)
+	return err
+}
+
+// apiURL joins an API path and its query to the client's base URL.
+func (c *Client) apiURL(path string, params url.Values) string {
+	u := c.baseURL + path
+	if len(params) > 0 {
 		u += "?" + params.Encode()
 	}
+	return u
+}
 
-	token, err := c.tokenProvider.Token()
-	if err != nil {
-		return fmt.Errorf("getting access token: %w", err)
-	}
+// A GET answered 429 or 423 with a Retry-After of at most maxInlineRetryWait is
+// retried up to maxRateLimitRetries times. A longer wait returns *RateLimitError.
+const (
+	maxRateLimitRetries = 2
+	maxInlineRetryWait  = 30 * time.Second
+)
 
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, err := readLimitedBody(resp.Body)
+// getHeaders performs an authenticated GET on u and decodes a 200 response into out,
+// returning the response headers (for Link paging). u is a full URL: either built by
+// apiURL, or a paging link the caller has checked with resolveNextLink. A short
+// Retry-After on 429 or 423 is waited out in-line.
+func (c *Client) getHeaders(u string, out interface{}) (http.Header, error) {
+	for attempt := 0; ; attempt++ {
+		// Fetched per attempt, so a token refreshed during a wait is picked up.
+		token, err := c.tokenProvider.Token()
 		if err != nil {
-			slog.Debug("failed to read error response body", "error", err)
+			return nil, fmt.Errorf("getting access token: %w", err)
 		}
-		slog.Debug("webex API error", "status", resp.StatusCode, "body", string(body))
-		return fmt.Errorf("webex API error (status %d)", resp.StatusCode)
-	}
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 
-	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(out)
+		resp, err := c.httpClient.Do(req) // #nosec G704 -- u is c.baseURL plus an API path, or a Link URL checked by resolveNextLink
+		if err != nil {
+			return nil, fmt.Errorf("executing request: %w", err)
+		}
+		if resp.StatusCode == http.StatusOK {
+			err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(out)
+			_ = resp.Body.Close()
+			return resp.Header, err
+		}
+
+		err = responseError(resp)
+		var rl *RateLimitError
+		if errors.As(err, &rl) && rl.RetryAfter <= maxInlineRetryWait && attempt < maxRateLimitRetries {
+			slog.Debug("webex API rate limited, retrying", "status", rl.Status, "retry_after", rl.RetryAfter, "attempt", attempt+1)
+			c.sleep(rl.RetryAfter)
+			continue
+		}
+		return nil, err
+	}
+}
+
+// apiError is a non-2xx Webex response. Its message is the long-standing
+// "webex API error (status N)"; a 404 also matches ErrNotFound with errors.Is.
+type apiError struct {
+	Status int
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("webex API error (status %d)", e.Status)
+}
+
+func (e *apiError) Is(target error) bool {
+	return target == ErrNotFound && e.Status == http.StatusNotFound
+}
+
+// responseError reads and closes the body of a failed response, logs it at debug
+// level, and returns the typed error for its status: *RateLimitError for 429 and
+// 423, otherwise *apiError (which matches ErrNotFound for 404).
+func responseError(resp *http.Response) error {
+	defer func() { _ = resp.Body.Close() }()
+	body, err := readLimitedBody(resp.Body)
+	if err != nil {
+		slog.Debug("failed to read error response body", "error", err)
+	}
+	slog.Debug("webex API error", "status", resp.StatusCode, "body", string(body))
+
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests, http.StatusLocked:
+		return &RateLimitError{
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
+	default:
+		return &apiError{Status: resp.StatusCode}
+	}
+}
+
+// defaultRetryAfter is the wait assumed when a 429 or 423 has no usable Retry-After.
+const defaultRetryAfter = 5 * time.Second
+
+// maxRetryAfterSeconds bounds a delta-seconds Retry-After so the Duration cannot overflow.
+const maxRetryAfterSeconds = 1 << 30
+
+// parseRetryAfter reads a Retry-After value, delta-seconds or an HTTP-date (RFC 9110
+// section 10.2.3), relative to now. A missing or malformed value gives
+// defaultRetryAfter; a date in the past gives 0.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return defaultRetryAfter
+	}
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if n < 0 {
+			return defaultRetryAfter
+		}
+		return time.Duration(min(n, maxRetryAfterSeconds)) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		return max(t.Sub(now), 0)
+	}
+	return defaultRetryAfter
 }
 
 // Attachment represents a Webex message attachment (e.g., Adaptive Card).
@@ -349,7 +447,7 @@ func (c *Client) ShareFile(roomID, parentID, name string, data []byte, text, mar
 	if err != nil {
 		return nil, fmt.Errorf("getting access token: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/messages", body)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/messages", body)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -358,7 +456,7 @@ func (c *Client) ShareFile(roomID, parentID, name string, data []byte, text, mar
 
 	hc := *c.httpClient
 	hc.Timeout = uploadTimeout
-	resp, err := hc.Do(req)
+	resp, err := hc.Do(req) // #nosec G704 -- the URL is c.baseURL plus a constant path
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
@@ -552,7 +650,7 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	params := url.Values{}
 	params.Set("format", format)
 
-	u := baseURL + "/meetingTranscripts/" + url.PathEscape(transcriptID) + "/download?" + params.Encode()
+	u := c.baseURL + "/meetingTranscripts/" + url.PathEscape(transcriptID) + "/download?" + params.Encode()
 
 	token, err := c.tokenProvider.Token()
 	if err != nil {
@@ -565,7 +663,7 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- the URL is c.baseURL plus a constant path
 	if err != nil {
 		return "", fmt.Errorf("executing request: %w", err)
 	}
@@ -599,14 +697,15 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 		return fmt.Errorf("getting access token: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(jsonBody))
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(jsonBody))
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	// Never retried, even on 429: a Webex POST has no idempotency key.
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- the URL is c.baseURL plus a constant path
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
@@ -614,18 +713,12 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 }
 
 // decode closes resp and decodes a 200 or 201 response into out. Each caller runs Do
-// itself on a URL built from baseURL, so the request target stays visibly constant.
+// itself on a URL built from c.baseURL, so the request target stays visibly constant.
+// Failures are typed as in responseError (ErrNotFound, *RateLimitError), never retried.
 func decode(resp *http.Response, out interface{}) error {
-	defer func() { _ = resp.Body.Close() }()
-
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		respBody, err := readLimitedBody(resp.Body)
-		if err != nil {
-			slog.Debug("failed to read error response body", "error", err)
-		}
-		slog.Debug("webex API error", "status", resp.StatusCode, "body", string(respBody))
-		return fmt.Errorf("webex API error (status %d)", resp.StatusCode)
+		return responseError(resp)
 	}
-
+	defer func() { _ = resp.Body.Close() }()
 	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(out)
 }
