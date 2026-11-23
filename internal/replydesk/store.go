@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -25,7 +26,42 @@ const (
 	maxStoreSize = 10 << 20
 	// storeFileName is the store's name in the webex-mcp config directory.
 	storeFileName = "replydesk.json"
+	// tombstoneFileName marks that Purge ran. It sits beside the store and
+	// holds the purge time; a running Store that sees one newer than its
+	// open time stops persisting.
+	tombstoneFileName = "replydesk.purged"
+	// tmpPattern is the os.CreateTemp pattern suffix for the store's temp
+	// files, appended to the store's base name.
+	tmpPattern = ".tmp-*"
+	// maxTombstoneSize caps the tombstone read.
+	maxTombstoneSize = 256
 )
+
+// Variables rather than constants so tests can change them before
+// OpenStore. They are read once at open.
+var (
+	// storeFlushInterval is the minimum gap between background writes.
+	storeFlushInterval = 250 * time.Millisecond
+	// renameTries and renameBackoff retry the atomic rename. On Windows an
+	// antivirus or indexer briefly holding the target makes it fail with
+	// "Access is denied".
+	renameTries   = defaultRenameTries()
+	renameBackoff = 20 * time.Millisecond
+)
+
+func defaultRenameTries() int {
+	if runtime.GOOS == "windows" {
+		return 5
+	}
+	return 1
+}
+
+// ErrPurged is returned by Put, PutSync and Prune after the state was purged
+// (--logout/--switch) while this store was open. Disabled then reports true.
+var ErrPurged = errors.New("replydesk store: state was purged by --logout or --switch; not saving")
+
+// errStoreClosed is returned by writes after Close.
+var errStoreClosed = errors.New("replydesk store: closed")
 
 // storeFile is the on-disk layout of replydesk.json.
 type storeFile struct {
@@ -37,12 +73,41 @@ type storeFile struct {
 // Store persists per-room Reply Desk state in a 0600 JSON file. It is safe
 // for concurrent use. Records handed in and out are deep copies, so callers
 // can't mutate stored state behind the lock.
+//
+// Put only updates memory and wakes a single writer goroutine, which writes
+// at most every storeFlushInterval with the latest state; the disk write
+// (and icacls on Windows) never runs on the caller's goroutine. PutSync
+// writes before it returns. Close flushes.
+//
+// A disk store holds replydesk.lock for its lifetime, so a second
+// --review on the same store gets ErrAlreadyRunning.
 type Store struct {
 	mu      sync.Mutex
 	path    string // "" means in-memory
 	owner   string
 	records map[string]Record
 	now     func() time.Time
+
+	// The rest is used only in disk mode.
+
+	// rename replaces the store file with a written temp file.
+	rename func(oldpath, newpath string) error
+	// openedAt is the wall time OpenStore finished clearing old
+	// tombstones; a tombstone at or after it means a purge since.
+	openedAt time.Time
+	// gen counts in-memory changes; written is the gen last on disk.
+	gen, written uint64
+	lastErr      error
+	disabled     bool
+	closed       bool
+
+	writeMu    sync.Mutex    // serialises disk writes (writer, PutSync, Close)
+	kick       chan struct{} // capacity 1: a pending write
+	stop       chan struct{} // closed by Close
+	writerDone chan struct{}
+	lock       *instanceLock
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 // DefaultStorePath is replydesk.json in the webex-mcp user config directory.
@@ -56,6 +121,10 @@ func DefaultStorePath() (string, error) {
 
 // OpenStore loads the store at path for the given owner person ID. A file
 // written for a different owner is discarded. path "" means in-memory.
+//
+// A disk store takes the instance lock (ErrAlreadyRunning if another
+// --review holds it) and removes a tombstone left by an earlier Purge, so a
+// --review started after --logout begins clean. Call Close when done.
 //
 // A file that isn't valid JSON (or has an unknown version) is renamed to
 // "<path>.corrupt" and the store starts empty. A file over 10 MB is an error.
@@ -72,16 +141,52 @@ func OpenStore(path, owner string) (*Store, error) {
 	if owner == "" {
 		return nil, errors.New("replydesk store: owner person ID is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	// The directory is the shared webex-mcp config dir, so its ACL is left
+	// alone: restricting it on Windows would not give new files a private
+	// ACL (icacls /grant:r without (OI) sets nothing inheritable) and would
+	// change the ACL of every other file there. Each temp file is
+	// restricted instead, in the writer.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating store dir: %w", err)
 	}
 
-	data, err := readCapped(path, maxStoreSize)
-	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
-	}
+	lock, err := acquireInstanceLock(dir)
 	if err != nil {
 		return nil, err
+	}
+	s.lock = lock
+	tries, backoff := renameTries, renameBackoff
+	s.rename = func(oldpath, newpath string) error {
+		return renameRetry(os.Rename, tries, backoff, oldpath, newpath)
+	}
+	if err := s.load(); err != nil {
+		_ = lock.release()
+		return nil, err
+	}
+
+	s.kick = make(chan struct{}, 1)
+	s.stop = make(chan struct{})
+	s.writerDone = make(chan struct{})
+	go s.writer(storeFlushInterval)
+	return s, nil
+}
+
+// load clears a stale tombstone and reads the store file. The instance lock
+// must be held.
+func (s *Store) load() error {
+	tomb := s.tombstonePath()
+	if err := os.Remove(tomb); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing old purge marker: %w", err)
+	}
+	s.openedAt = time.Now()
+
+	data, err := readCapped(s.path, maxStoreSize)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 
 	var f storeFile
@@ -90,20 +195,20 @@ func OpenStore(path, owner string) (*Store, error) {
 		if err != nil {
 			reason = "invalid JSON"
 		}
-		if rerr := os.Rename(path, path+".corrupt"); rerr != nil {
-			return nil, fmt.Errorf("moving unreadable store aside: %w", rerr)
+		if rerr := s.rename(s.path, s.path+".corrupt"); rerr != nil {
+			return fmt.Errorf("moving unreadable store aside: %w", rerr)
 		}
 		slog.Warn("replydesk: store unreadable, moved aside and starting empty",
-			"reason", reason, "moved_to", path+".corrupt")
-		return s, nil
+			"reason", reason, "moved_to", s.path+".corrupt")
+		return nil
 	}
 
-	if f.Owner != owner {
-		if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-			return nil, fmt.Errorf("removing store for another account: %w", rerr)
+	if f.Owner != s.owner {
+		if rerr := os.Remove(s.path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			return fmt.Errorf("removing store for another account: %w", rerr)
 		}
 		slog.Info("replydesk: discarded state saved for a different account")
-		return s, nil
+		return nil
 	}
 
 	for roomID, r := range f.Records {
@@ -118,7 +223,7 @@ func OpenStore(path, owner string) (*Store, error) {
 		}
 		s.records[roomID] = cloneRecord(r)
 	}
-	return s, nil
+	return nil
 }
 
 // readCapped reads path, failing if it is larger than limit bytes.
@@ -158,11 +263,46 @@ func (s *Store) Get(roomID string) (Record, bool) {
 	return cloneRecord(r), true
 }
 
-// Put saves a record (UpdatedAt is set) and persists atomically. If the
-// write fails the record is still kept in memory and the error is returned.
+// Put saves a record (UpdatedAt is set) in memory and schedules a background
+// write. It returns the error of the last background write, if that failed
+// and nothing has been written since; the record is kept in memory either
+// way. After a purge (see Disabled) it returns ErrPurged and keeps nothing.
 func (s *Store) Put(r Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.putLocked(r); err != nil {
+		return err
+	}
+	s.scheduleLocked()
+	return s.lastErr
+}
+
+// PutSync is Put, but the record is on disk before it returns. Use it for
+// state that must survive a crash (StateSending before the POST). The
+// record is kept in memory even if the write fails.
+func (s *Store) PutSync(r Record) error {
+	s.mu.Lock()
+	err := s.putLocked(r)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if s.path == "" {
+		return nil
+	}
+	return s.flush()
+}
+
+// putLocked validates r and stores a copy in memory. s.mu must be held.
+func (s *Store) putLocked(r Record) error {
 	if r.RoomID == "" {
 		return errors.New("replydesk store: record has no room ID")
+	}
+	if s.disabled {
+		return ErrPurged
+	}
+	if s.closed {
+		return errStoreClosed
 	}
 	r = cloneRecord(r)
 	if r.Draft != nil {
@@ -170,12 +310,21 @@ func (s *Store) Put(r Record) error {
 			r.Draft.Cited[i].Text = capBytes(r.Draft.Cited[i].Text, MaxCitationLen)
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	r.UpdatedAt = s.now().UTC().Round(0)
 	s.records[r.RoomID] = r
-	return s.persistLocked()
+	s.gen++
+	return nil
+}
+
+// scheduleLocked wakes the writer. s.mu must be held.
+func (s *Store) scheduleLocked() {
+	if s.path == "" {
+		return
+	}
+	select {
+	case s.kick <- struct{}{}:
+	default: // a write is already pending; it will pick up this change
+	}
 }
 
 // All returns every record, sorted by room ID.
@@ -191,10 +340,14 @@ func (s *Store) All() []Record {
 }
 
 // Prune drops records last updated before the cutoff and returns how many
-// were dropped. The file is rewritten only if something changed.
+// were dropped. A write is scheduled only if something changed; the error is
+// the last background write's, as with Put.
 func (s *Store) Prune(before time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.disabled {
+		return 0, ErrPurged
+	}
 	n := 0
 	for id, r := range s.records {
 		if r.UpdatedAt.Before(before) {
@@ -205,67 +358,158 @@ func (s *Store) Prune(before time.Time) (int, error) {
 	if n == 0 {
 		return 0, nil
 	}
-	return n, s.persistLocked()
-}
-
-// Purge deletes the default store file. --logout and --switch call it.
-func Purge() error {
-	path, err := DefaultStorePath()
-	if err != nil {
-		return err
+	if s.closed {
+		return n, errStoreClosed
 	}
-	return purgePath(path)
+	s.gen++
+	s.scheduleLocked()
+	return n, s.lastErr
 }
 
-// purgePath removes path and its .tmp and .corrupt siblings. Missing files
-// are not errors.
-func purgePath(path string) error {
-	var errs []error
-	for _, p := range []string{path, path + ".tmp", path + ".corrupt"} {
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("removing %s: %w", filepath.Base(p), err))
-		}
+// LastError returns the error from the most recent failed disk write, or nil
+// once a later write succeeds. Background write failures are also logged.
+func (s *Store) LastError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastErr
+}
+
+// Disabled reports whether persistence stopped because the state was purged
+// (--logout/--switch) by another process. It checks for the purge marker,
+// so it notices a purge before the next write does.
+func (s *Store) Disabled() bool {
+	if s.path == "" {
+		return false
 	}
-	return errors.Join(errs...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return s.disabled
+	}
+	return s.checkPurgedLocked()
 }
 
-// persistLocked writes the store atomically: "<path>.tmp" (0600, owner-only
-// ACL on Windows), then rename. s.mu must be held.
-func (s *Store) persistLocked() error {
+// Close stops the writer, flushes pending changes, and releases the
+// instance lock. It is safe to call more than once; later calls return the
+// first call's result. Get and All keep working on the in-memory state.
+func (s *Store) Close() error {
 	if s.path == "" {
 		return nil
 	}
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		<-s.writerDone
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		ferr := s.flush()
+		if errors.Is(ferr, ErrPurged) {
+			ferr = nil // Disabled reports it; nothing was lost that should be kept
+		}
+		s.closeErr = errors.Join(ferr, s.lock.release())
+	})
+	return s.closeErr
+}
+
+// writer is the single background writer. It sleeps until kicked, waits so
+// writes are at least interval apart, then writes the latest state.
+func (s *Store) writer(interval time.Duration) {
+	defer close(s.writerDone)
+	var last time.Time
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-s.kick:
+		}
+		if wait := interval - time.Since(last); !last.IsZero() && wait > 0 {
+			t := time.NewTimer(wait)
+			select {
+			case <-s.stop:
+				t.Stop()
+				return // Close flushes
+			case <-t.C:
+			}
+		}
+		err := s.flush()
+		last = time.Now()
+		if err != nil && !errors.Is(err, ErrPurged) {
+			slog.Warn("replydesk: saving state failed; it is kept in memory and retried on the next change",
+				"error", err)
+		}
+	}
+}
+
+// flush writes the current state if it changed since the last successful
+// write. It checks for a purge before and after writing.
+func (s *Store) flush() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.mu.Lock()
+	if s.checkPurgedLocked() {
+		s.mu.Unlock()
+		return ErrPurged
+	}
+	if s.gen == s.written {
+		s.mu.Unlock()
+		return nil
+	}
+	gen := s.gen
 	data, err := json.MarshalIndent(storeFile{
 		Version: storeVersion,
 		Owner:   s.owner,
 		Records: s.records,
 	}, "", "  ")
+	s.mu.Unlock()
 	if err != nil {
-		return fmt.Errorf("encoding store: %w", err)
+		err = fmt.Errorf("encoding store: %w", err)
+	} else {
+		err = s.writeFile(data)
 	}
 
-	tmp := s.path + ".tmp"
-	// Remove any stale tmp so O_EXCL creates a fresh file with our mode
-	// rather than inheriting a looser one.
-	_ = os.Remove(tmp)
-	if err := writeTmp(tmp, data); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.lastErr = err
+		return err
+	}
+	// A purge that ran while we wrote: undo our write, so the state the
+	// user asked to delete is not left on disk.
+	if s.checkPurgedLocked() {
+		if rerr := os.Remove(s.path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			slog.Warn("replydesk: could not remove state written during a purge", "error", rerr)
+		}
+		return ErrPurged
+	}
+	if gen > s.written {
+		s.written = gen
+	}
+	s.lastErr = nil
+	return nil
+}
+
+// writeFile writes data atomically: a fresh temp file in the store dir
+// (0600, owner-only ACL on Windows), then rename over the store.
+func (s *Store) writeFile(data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+tmpPattern)
+	if err != nil {
+		return fmt.Errorf("creating store tmp: %w", err)
+	}
+	tmp := f.Name()
+	if err := writeTmp(f, data); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := s.rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("replacing store: %w", err)
 	}
 	return nil
 }
 
-// writeTmp creates tmp with mode 0600, writes data, syncs, and restricts the
-// ACL.
-func writeTmp(tmp string, data []byte) error {
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- tmp is derived from the store path in the user config dir
-	if err != nil {
-		return fmt.Errorf("creating store tmp: %w", err)
-	}
+// writeTmp writes data to f, syncs and closes it, and restricts its ACL.
+func writeTmp(f *os.File, data []byte) error {
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("writing store tmp: %w", err)
@@ -277,10 +521,117 @@ func writeTmp(tmp string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("closing store tmp: %w", err)
 	}
-	if err := auth.RestrictFileAccess(tmp); err != nil {
+	if err := auth.RestrictFileAccess(f.Name()); err != nil {
 		return fmt.Errorf("restricting store tmp access: %w", err)
 	}
 	return nil
+}
+
+// renameRetry calls rename up to tries times, sleeping backoff (doubling)
+// between attempts. A missing source is not retried.
+func renameRetry(rename func(oldpath, newpath string) error, tries int, backoff time.Duration, oldpath, newpath string) error {
+	var err error
+	n := max(tries, 1)
+	for i := range n {
+		if err = rename(oldpath, newpath); err == nil {
+			return nil
+		}
+		if errors.Is(err, fs.ErrNotExist) || i == n-1 {
+			break
+		}
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+	return err
+}
+
+// ---- purge ----
+
+func (s *Store) tombstonePath() string {
+	return filepath.Join(filepath.Dir(s.path), tombstoneFileName)
+}
+
+// checkPurgedLocked reports whether persistence is off, turning it off if a
+// purge happened since open: records are dropped, nothing is deleted, and a
+// warning is logged once. s.mu must be held.
+func (s *Store) checkPurgedLocked() bool {
+	if s.disabled {
+		return true
+	}
+	if !purgedSince(s.tombstonePath(), s.openedAt) {
+		return false
+	}
+	s.disabled = true
+	s.records = make(map[string]Record)
+	slog.Warn("replydesk: Reply Desk state was deleted by --logout or --switch; no longer saving it")
+	return true
+}
+
+// purgedSince reports whether the tombstone at path records a purge at or
+// after t. An unreadable tombstone counts as a purge: OpenStore removed any
+// older one, so one that exists now was written after open.
+func purgedSince(path string, t time.Time) bool {
+	data, err := readCapped(path, maxTombstoneSize)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	at, perr := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data)))
+	if perr != nil {
+		return true
+	}
+	return !at.Before(t)
+}
+
+// Purge deletes the default store file. --logout and --switch call it. A
+// --review still running notices the purge marker it leaves and stops
+// saving.
+func Purge() error {
+	path, err := DefaultStorePath()
+	if err != nil {
+		return err
+	}
+	return purgePath(path)
+}
+
+// purgePath writes the purge marker, then removes path and its temp and
+// .corrupt siblings. Missing files are not errors. The instance lock is left
+// for its holder.
+//
+// The marker is written first so a running Store's post-write check sees
+// it even if its write lands between our removes; written after, a write
+// racing the removes could survive.
+func purgePath(path string) error {
+	var errs []error
+	dir := filepath.Dir(path)
+	if _, err := os.Stat(dir); err == nil {
+		stamp := time.Now().UTC().Format(time.RFC3339Nano) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, tombstoneFileName), []byte(stamp), 0o600); err != nil {
+			errs = append(errs, fmt.Errorf("writing purge marker: %w", err))
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("checking store dir: %w", err))
+	}
+
+	targets := []string{path, path + ".tmp", path + ".corrupt"}
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("listing store tmp files: %w", err))
+	}
+	tmpPrefix := filepath.Base(path) + strings.TrimSuffix(tmpPattern, "*")
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), tmpPrefix) {
+			targets = append(targets, filepath.Join(dir, e.Name()))
+		}
+	}
+	for _, p := range targets {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("removing %s: %w", filepath.Base(p), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // capBytes truncates s to at most n bytes without splitting a UTF-8 rune.
@@ -311,14 +662,3 @@ func cloneRecord(r Record) Record {
 // ErrAlreadyRunning is returned by OpenStore when another webex-mcp --review
 // process holds the store.
 var ErrAlreadyRunning = errors.New("another webex-mcp --review is already running")
-
-// PutSync is Put, but the record is on disk before it returns. Use it for
-// state that must survive a crash (StateSending before the POST).
-func (s *Store) PutSync(r Record) error { return s.Put(r) }
-
-// Close flushes pending writes and releases the store's instance lock.
-func (s *Store) Close() error { return nil }
-
-// Disabled reports whether persistence stopped because the state was purged
-// (--logout/--switch) by another process.
-func (s *Store) Disabled() bool { return false }

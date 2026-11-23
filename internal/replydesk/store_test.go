@@ -2,6 +2,7 @@ package replydesk
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,13 +39,83 @@ func storePath(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "sub", "replydesk.json")
 }
 
+// mustOpen opens a store and closes it when the test ends. Close is
+// idempotent, so tests may also close it themselves.
 func mustOpen(t *testing.T, path, owner string) *Store {
 	t.Helper()
 	s, err := OpenStore(path, owner)
 	if err != nil {
 		t.Fatalf("OpenStore(%q, %q): %v", path, owner, err)
 	}
+	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// mustClose closes s, failing the test on error.
+func mustClose(t *testing.T, s *Store) {
+	t.Helper()
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// reopen closes s (flushing it and releasing the lock) and opens its path
+// again for owner.
+func reopen(t *testing.T, s *Store, owner string) *Store {
+	t.Helper()
+	mustClose(t, s)
+	return mustOpen(t, s.path, owner)
+}
+
+// tmpFiles lists the store's temp files (both the old fixed name and the
+// CreateTemp pattern).
+func tmpFiles(t *testing.T, path string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), filepath.Base(path)+".tmp") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// setVar sets a package variable for the duration of the test.
+func setVar[T any](t *testing.T, p *T, v T) {
+	t.Helper()
+	old := *p
+	*p = v
+	t.Cleanup(func() { *p = old })
+}
+
+// eventually polls cond until it holds or 10s pass.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// fileHasRoom reports whether the store file on disk holds room.
+func fileHasRoom(path, room string) bool {
+	data, err := os.ReadFile(path) // #nosec G304 -- test temp path
+	if err != nil {
+		return false
+	}
+	var f storeFile
+	if json.Unmarshal(data, &f) != nil {
+		return false
+	}
+	_, ok := f.Records[room]
+	return ok
 }
 
 func sampleRecord(room string) Record {
@@ -153,12 +224,13 @@ func TestStore_RoundTrip(t *testing.T) {
 		}
 	}
 
+	mustClose(t, s)
 	f := readFile(t, path)
 	if f.Version != 1 || f.Owner != testOwner || len(f.Records) != 3 {
 		t.Fatalf("file = version %d owner %q %d records; want 1, %q, 3", f.Version, f.Owner, len(f.Records), testOwner)
 	}
-	if exists(path + ".tmp") {
-		t.Error("tmp file left behind")
+	if tmps := tmpFiles(t, path); len(tmps) != 0 {
+		t.Errorf("tmp files left behind: %v", tmps)
 	}
 
 	s2 := mustOpen(t, path, testOwner)
@@ -206,7 +278,7 @@ func TestStore_PutUpdatesExisting(t *testing.T) {
 	if err := s.Put(r); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := mustOpen(t, path, testOwner).Get("r")
+	got, _ := reopen(t, s, testOwner).Get("r")
 	if got.State != StateSent || got.SentMessageID != "sent-1" || !got.UpdatedAt.Equal(clk.now()) {
 		t.Errorf("got %+v", got)
 	}
@@ -254,21 +326,21 @@ func TestOpenStore_OwnerMismatchDiscards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s2 := mustOpen(t, path, "person-b")
+	s2 := reopen(t, s, "person-b")
 	if n := len(s2.All()); n != 0 {
 		t.Fatalf("owner mismatch kept %d records", n)
 	}
 	if exists(path) {
 		t.Error("store file for another owner was not removed")
 	}
-	if err := s2.Put(sampleRecord("r2")); err != nil {
+	if err := s2.PutSync(sampleRecord("r2")); err != nil {
 		t.Fatal(err)
 	}
 	if f := readFile(t, path); f.Owner != "person-b" || len(f.Records) != 1 {
 		t.Errorf("file after new owner Put = %+v", f)
 	}
 	// The original owner now sees a file that is not theirs.
-	if n := len(mustOpen(t, path, "person-a").All()); n != 0 {
+	if n := len(reopen(t, s2, "person-a").All()); n != 0 {
 		t.Errorf("person-a sees %d records from person-b", n)
 	}
 }
@@ -307,7 +379,7 @@ func TestOpenStore_UnreadableMovedAside(t *testing.T) {
 			if string(data) != tt.content {
 				t.Errorf("corrupt copy = %q, want %q", data, tt.content)
 			}
-			if err := s.Put(sampleRecord("r")); err != nil {
+			if err := s.PutSync(sampleRecord("r")); err != nil {
 				t.Fatalf("Put after recovery: %v", err)
 			}
 			if f := readFile(t, path); len(f.Records) != 1 {
@@ -355,6 +427,9 @@ func TestOpenStore_OversizeFile(t *testing.T) {
 	if !exists(path) {
 		t.Error("oversize store was removed; it should be left for the user")
 	}
+	if exists(filepath.Join(filepath.Dir(path), lockFileName)) {
+		t.Error("failed OpenStore left its instance lock behind")
+	}
 }
 
 func TestOpenStore_ExactlyAtLimit(t *testing.T) {
@@ -367,9 +442,11 @@ func TestOpenStore_ExactlyAtLimit(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenStore(path, testOwner); err != nil {
+	s, err := OpenStore(path, testOwner)
+	if err != nil {
 		t.Fatalf("store at the size limit: %v", err)
 	}
+	mustClose(t, s)
 }
 
 func TestCapBytes(t *testing.T) {
@@ -433,7 +510,8 @@ func TestStore_PutCapsCitations(t *testing.T) {
 			if err := s.Put(r); err != nil {
 				t.Fatal(err)
 			}
-			for _, got := range []Record{mustGet(t, s, "r"), mustGet(t, mustOpen(t, path, testOwner), "r")} {
+			inMemory := mustGet(t, s, "r")
+			for _, got := range []Record{inMemory, mustGet(t, reopen(t, s, testOwner), "r")} {
 				c := got.Draft.Cited[0].Text
 				if len(c) != tt.wantLen {
 					t.Errorf("len = %d, want %d", len(c), tt.wantLen)
@@ -486,7 +564,7 @@ func TestStore_Prune(t *testing.T) {
 			s.now = clk.now
 			for i := range 3 {
 				clk.set(base.Add(time.Duration(i) * 24 * time.Hour))
-				if err := s.Put(Record{RoomID: fmt.Sprintf("r%d", i), State: StatePending}); err != nil {
+				if err := s.PutSync(Record{RoomID: fmt.Sprintf("r%d", i), State: StatePending}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -512,7 +590,7 @@ func TestStore_Prune(t *testing.T) {
 				}
 			}
 			check("memory", s.All())
-			check("disk", mustOpen(t, path, testOwner).All())
+			mustClose(t, s)
 
 			after, err := os.Stat(path)
 			if err != nil {
@@ -522,14 +600,15 @@ func TestStore_Prune(t *testing.T) {
 			if rewritten != (tt.wantN > 0) {
 				t.Errorf("file rewritten = %v, want %v", rewritten, tt.wantN > 0)
 			}
+			check("disk", mustOpen(t, path, testOwner).All())
 		})
 	}
 }
 
 func TestPurgePath(t *testing.T) {
-	suffixes := []string{"", ".tmp", ".corrupt"}
+	suffixes := []string{"", ".tmp", ".corrupt", ".tmp-123456", ".tmp-abc"}
 	for mask := range 1 << len(suffixes) {
-		t.Run(fmt.Sprintf("present=%03b", mask), func(t *testing.T) {
+		t.Run(fmt.Sprintf("present=%05b", mask), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "replydesk.json")
 			for i, suf := range suffixes {
 				if mask&(1<<i) != 0 {
@@ -542,6 +621,11 @@ func TestPurgePath(t *testing.T) {
 			if err := os.WriteFile(other, []byte("{}"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			lock := filepath.Join(filepath.Dir(path), lockFileName)
+			if err := os.WriteFile(lock, []byte("pid=1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := time.Now()
 			if err := purgePath(path); err != nil {
 				t.Fatalf("purgePath: %v", err)
 			}
@@ -552,6 +636,12 @@ func TestPurgePath(t *testing.T) {
 			}
 			if !exists(other) {
 				t.Error("purge removed an unrelated file")
+			}
+			if !exists(lock) {
+				t.Error("purge removed the instance lock; only its holder may")
+			}
+			if !purgedSince(filepath.Join(filepath.Dir(path), tombstoneFileName), before) {
+				t.Error("purge did not leave a current purge marker")
 			}
 		})
 	}
@@ -571,7 +661,7 @@ func TestPurge_DefaultPath(t *testing.T) {
 		t.Skipf("could not redirect user config dir (got %s)", path)
 	}
 	s := mustOpen(t, path, testOwner)
-	if err := s.Put(sampleRecord("r")); err != nil {
+	if err := s.PutSync(sampleRecord("r")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path+".corrupt", []byte("x"), 0o600); err != nil {
@@ -582,6 +672,11 @@ func TestPurge_DefaultPath(t *testing.T) {
 	}
 	if exists(path) || exists(path+".corrupt") {
 		t.Error("Purge left files behind")
+	}
+	// The open store notices and does not write the state back.
+	mustClose(t, s)
+	if exists(path) {
+		t.Error("closing a store after Purge rewrote the file")
 	}
 	if err := Purge(); err != nil {
 		t.Errorf("second Purge on missing files: %v", err)
@@ -601,7 +696,7 @@ func TestStore_FileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := mustOpen(t, path, testOwner)
-	if err := s.Put(sampleRecord("r")); err != nil {
+	if err := s.PutSync(sampleRecord("r")); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(path)
@@ -618,6 +713,20 @@ func TestStore_FileMode(t *testing.T) {
 	if got := di.Mode().Perm(); got != 0o700 {
 		t.Errorf("store dir mode = %o, want 700", got)
 	}
+	for _, name := range []string{lockFileName, tombstoneFileName} {
+		if name == tombstoneFileName {
+			if err := purgePath(path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fi, err := os.Stat(filepath.Join(filepath.Dir(path), name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, got)
+		}
+	}
 }
 
 func TestStore_PersistFailureKeepsMemory(t *testing.T) {
@@ -627,14 +736,17 @@ func TestStore_PersistFailureKeepsMemory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(path, "block"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(sampleRecord("r")); err == nil {
-		t.Fatal("Put onto a directory: want error")
+	if err := s.PutSync(sampleRecord("r")); err == nil {
+		t.Fatal("PutSync onto a directory: want error")
 	}
-	if exists(path + ".tmp") {
-		t.Error("tmp file left after failed persist")
+	if tmps := tmpFiles(t, path); len(tmps) != 0 {
+		t.Errorf("tmp files left after failed persist: %v", tmps)
 	}
 	if _, ok := s.Get("r"); !ok {
 		t.Error("record dropped from memory after a failed write")
+	}
+	if s.LastError() == nil {
+		t.Error("LastError() = nil after a failed write")
 	}
 }
 
@@ -643,9 +755,6 @@ func TestStore_ConcurrentPut(t *testing.T) {
 		t.Run(fmt.Sprintf("disk=%v", path != ""), func(t *testing.T) {
 			s := mustOpen(t, path, testOwner)
 			workers, per := 8, 10
-			if path != "" {
-				workers, per = 4, 5 // each disk write runs icacls on Windows
-			}
 			var wg sync.WaitGroup
 			errs := make(chan error, workers*per)
 			for w := range workers {
@@ -671,10 +780,536 @@ func TestStore_ConcurrentPut(t *testing.T) {
 				t.Errorf("All() has %d records, want %d", n, workers*per)
 			}
 			if path != "" {
-				if n := len(mustOpen(t, path, testOwner).All()); n != workers*per {
+				if n := len(reopen(t, s, testOwner).All()); n != workers*per {
 					t.Errorf("disk has %d records, want %d", n, workers*per)
 				}
 			}
 		})
+	}
+}
+
+// ---- purge marker (F18) ----
+
+func TestStore_PurgeDisablesPersistence(t *testing.T) {
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	if s.Disabled() {
+		t.Fatal("new store is disabled")
+	}
+	if err := s.PutSync(sampleRecord("r1")); err != nil {
+		t.Fatal(err)
+	}
+
+	// --logout in another process.
+	if err := purgePath(path); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Fatal("purge left the store file")
+	}
+
+	// A change made after the purge must not bring the state back.
+	_ = s.Put(sampleRecord("r2"))
+	mustClose(t, s)
+	if exists(path) {
+		t.Fatal("store rewrote state after it was purged")
+	}
+	if !s.Disabled() {
+		t.Error("Disabled() = false after a purge")
+	}
+	if n := len(s.All()); n != 0 {
+		t.Errorf("disabled store still holds %d records", n)
+	}
+	if _, ok := s.Get("r1"); ok {
+		t.Error("disabled store still returns a purged record")
+	}
+	if !exists(filepath.Join(filepath.Dir(path), tombstoneFileName)) {
+		t.Error("disabled store deleted the purge marker")
+	}
+}
+
+func TestStore_PurgeDetectedBeforeWrite(t *testing.T) {
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	if err := s.PutSync(sampleRecord("r1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := purgePath(path); err != nil {
+		t.Fatal(err)
+	}
+	// Disabled notices the marker without waiting for a write.
+	if !s.Disabled() {
+		t.Fatal("Disabled() = false after a purge")
+	}
+	if err := s.PutSync(sampleRecord("r2")); !errors.Is(err, ErrPurged) {
+		t.Errorf("PutSync after purge = %v, want ErrPurged", err)
+	}
+	if err := s.Put(sampleRecord("r3")); !errors.Is(err, ErrPurged) {
+		t.Errorf("Put after purge = %v, want ErrPurged", err)
+	}
+	if _, err := s.Prune(time.Now()); !errors.Is(err, ErrPurged) {
+		t.Errorf("Prune after purge = %v, want ErrPurged", err)
+	}
+	if n := len(s.All()); n != 0 {
+		t.Errorf("disabled store holds %d records", n)
+	}
+	if exists(path) {
+		t.Error("disabled store wrote the file")
+	}
+	if err := s.Close(); err != nil {
+		t.Errorf("Close of a purged store: %v", err)
+	}
+}
+
+func TestOpenStore_RemovesStaleTombstone(t *testing.T) {
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	if err := s.PutSync(sampleRecord("r1")); err != nil {
+		t.Fatal(err)
+	}
+	mustClose(t, s)
+	if err := purgePath(path); err != nil {
+		t.Fatal(err)
+	}
+	tomb := filepath.Join(filepath.Dir(path), tombstoneFileName)
+	if !exists(tomb) {
+		t.Fatal("no purge marker")
+	}
+
+	// A --review started after --logout begins clean and saves again.
+	s2 := mustOpen(t, path, testOwner)
+	if exists(tomb) {
+		t.Error("OpenStore left the old purge marker")
+	}
+	if s2.Disabled() {
+		t.Fatal("store opened after a purge is disabled")
+	}
+	if n := len(s2.All()); n != 0 {
+		t.Errorf("store after purge has %d records", n)
+	}
+	if err := s2.PutSync(sampleRecord("r2")); err != nil {
+		t.Fatal(err)
+	}
+	if !fileHasRoom(path, "r2") {
+		t.Error("store opened after a purge did not save")
+	}
+}
+
+func TestPurgedSince(t *testing.T) {
+	dir := t.TempDir()
+	tomb := filepath.Join(dir, tombstoneFileName)
+	opened := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	if purgedSince(tomb, opened) {
+		t.Error("missing marker counts as purged")
+	}
+	tests := []struct {
+		content string
+		want    bool
+	}{
+		{opened.Add(-time.Second).Format(time.RFC3339Nano), false},
+		{opened.Format(time.RFC3339Nano), true},
+		{opened.Add(time.Nanosecond).Format(time.RFC3339Nano) + "\n", true},
+		{"garbage", true}, // OpenStore removed older markers, so this one is new
+	}
+	for _, tt := range tests {
+		if err := os.WriteFile(tomb, []byte(tt.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := purgedSince(tomb, opened); got != tt.want {
+			t.Errorf("purgedSince(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}
+
+// ---- instance lock (F28) ----
+
+func TestOpenStore_AlreadyRunning(t *testing.T) {
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+
+	_, err := OpenStore(path, testOwner)
+	if !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("second OpenStore = %v, want ErrAlreadyRunning", err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) {
+		t.Errorf("error %q does not name the holder's pid", err)
+	}
+	// A different store file in the same dir is the same instance.
+	if _, err := OpenStore(filepath.Join(filepath.Dir(path), "other.json"), testOwner); !errors.Is(err, ErrAlreadyRunning) {
+		t.Errorf("OpenStore beside a held lock = %v, want ErrAlreadyRunning", err)
+	}
+	// The in-memory store needs no lock.
+	if _, err := OpenStore("", testOwner); err != nil {
+		t.Errorf("in-memory OpenStore while locked: %v", err)
+	}
+
+	mustClose(t, s)
+	mustOpen(t, path, testOwner)
+}
+
+func TestOpenStore_StaleLockTakeover(t *testing.T) {
+	tests := []struct {
+		name     string
+		age      time.Duration
+		wantTake bool
+	}{
+		{"fresh", 30 * time.Second, false},
+		{"just under stale", 2*time.Minute + 50*time.Second, false},
+		{"stale", 4 * time.Minute, true},
+		{"long dead", 48 * time.Hour, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := storePath(t)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			lock := filepath.Join(filepath.Dir(path), lockFileName)
+			foreign := []byte("pid=999999\ntime=2026-11-01T00:00:00Z\nnonce=00\n")
+			if err := os.WriteFile(lock, foreign, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Now().Add(-tt.age)
+			if err := os.Chtimes(lock, old, old); err != nil {
+				t.Fatal(err)
+			}
+
+			s, err := OpenStore(path, testOwner)
+			if !tt.wantTake {
+				if !errors.Is(err, ErrAlreadyRunning) {
+					t.Fatalf("OpenStore = %v, want ErrAlreadyRunning", err)
+				}
+				if !strings.Contains(err.Error(), "pid 999999") {
+					t.Errorf("error %q does not name the holder", err)
+				}
+				data, rerr := os.ReadFile(lock) // #nosec G304 -- test temp path
+				if rerr != nil || string(data) != string(foreign) {
+					t.Errorf("a fresh lock was disturbed: %q, %v", data, rerr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("OpenStore over a stale lock: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			data, err := os.ReadFile(lock) // #nosec G304 -- test temp path
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), fmt.Sprintf("pid=%d\n", os.Getpid())) {
+				t.Errorf("lock after takeover = %q, want our pid", data)
+			}
+		})
+	}
+}
+
+func TestStore_CloseReleasesLock(t *testing.T) {
+	path := storePath(t)
+	lock := filepath.Join(filepath.Dir(path), lockFileName)
+	s := mustOpen(t, path, testOwner)
+	if !exists(lock) {
+		t.Fatal("OpenStore did not create the lock")
+	}
+	mustClose(t, s)
+	if exists(lock) {
+		t.Error("Close left the lock")
+	}
+	if err := s.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+	if err := s.Put(sampleRecord("r")); err == nil {
+		t.Error("Put after Close: want error")
+	}
+
+	// A lock another process took over is not ours to remove.
+	s2 := mustOpen(t, path, testOwner)
+	if err := os.WriteFile(lock, []byte("pid=999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustClose(t, s2)
+	if !exists(lock) {
+		t.Error("Close removed a lock it no longer owned")
+	}
+}
+
+func TestStore_LockHeartbeat(t *testing.T) {
+	setVar(t, &lockHeartbeat, 10*time.Millisecond)
+	path := storePath(t)
+	lock := filepath.Join(filepath.Dir(path), lockFileName)
+	mustOpen(t, path, testOwner)
+
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "lock mtime refresh", func() bool {
+		fi, err := os.Stat(lock)
+		return err == nil && time.Since(fi.ModTime()) < time.Minute
+	})
+	// Refreshed, so a second instance still sees it as held.
+	if _, err := OpenStore(path, testOwner); !errors.Is(err, ErrAlreadyRunning) {
+		t.Errorf("OpenStore after heartbeat = %v, want ErrAlreadyRunning", err)
+	}
+}
+
+func TestStore_TempFilesAreUnique(t *testing.T) {
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	var mu sync.Mutex
+	var tmps []string
+	s.rename = func(oldpath, newpath string) error {
+		mu.Lock()
+		tmps = append(tmps, oldpath)
+		mu.Unlock()
+		return os.Rename(oldpath, newpath)
+	}
+	for i := range 3 {
+		if err := s.PutSync(sampleRecord(fmt.Sprintf("r%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	seen := map[string]bool{}
+	for _, p := range tmps {
+		if filepath.Dir(p) != filepath.Dir(path) {
+			t.Errorf("tmp %s is not in the store dir", p)
+		}
+		base := filepath.Base(p)
+		if !strings.HasPrefix(base, "replydesk.json.tmp-") || base == "replydesk.json.tmp-" {
+			t.Errorf("tmp name %q does not follow the CreateTemp pattern", base)
+		}
+		if seen[p] {
+			t.Errorf("tmp name %q reused", base)
+		}
+		seen[p] = true
+	}
+	if len(tmps) != 3 {
+		t.Errorf("%d renames, want 3", len(tmps))
+	}
+}
+
+// ---- background writes (F29) ----
+
+func TestStore_PutIsAsyncAndCoalesced(t *testing.T) {
+	setVar(t, &storeFlushInterval, time.Hour)
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+
+	// The first write after idle goes out at once, in the background.
+	if err := s.Put(sampleRecord("r1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "r1 on disk", func() bool { return fileHasRoom(path, "r1") })
+
+	// Later ones wait for the flush interval: Put itself does not write.
+	for i := range 5 {
+		if err := s.Put(sampleRecord(fmt.Sprintf("later-%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if fileHasRoom(path, "later-0") {
+		t.Fatal("Put wrote to disk synchronously instead of scheduling a write")
+	}
+	if _, ok := s.Get("later-4"); !ok {
+		t.Fatal("Put did not update memory")
+	}
+
+	// Close flushes the latest state.
+	mustClose(t, s)
+	for i := range 5 {
+		if room := fmt.Sprintf("later-%d", i); !fileHasRoom(path, room) {
+			t.Errorf("%s not on disk after Close", room)
+		}
+	}
+}
+
+func TestStore_PutEventuallyOnDisk(t *testing.T) {
+	setVar(t, &storeFlushInterval, 20*time.Millisecond)
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	for i := range 4 {
+		if err := s.Put(sampleRecord(fmt.Sprintf("r%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "all records on disk", func() bool {
+		return fileHasRoom(path, "r0") && fileHasRoom(path, "r3")
+	})
+	if tmps := tmpFiles(t, path); len(tmps) != 0 {
+		t.Errorf("tmp files left: %v", tmps)
+	}
+}
+
+func TestStore_PutSyncOnDiskImmediately(t *testing.T) {
+	setVar(t, &storeFlushInterval, time.Hour)
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	if err := s.Put(sampleRecord("async")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "first write", func() bool { return fileHasRoom(path, "async") })
+	// The writer now holds off for an hour; PutSync must not wait for it.
+	r := sampleRecord("sync")
+	r.State = StateSending
+	if err := s.PutSync(r); err != nil {
+		t.Fatal(err)
+	}
+	f := readFile(t, path)
+	if got, ok := f.Records["sync"]; !ok || got.State != StateSending {
+		t.Fatalf("PutSync record on disk = %+v, %v", got, ok)
+	}
+}
+
+func TestStore_LastError(t *testing.T) {
+	setVar(t, &storeFlushInterval, time.Millisecond)
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	if err := s.LastError(); err != nil {
+		t.Fatalf("LastError on a new store = %v", err)
+	}
+	// A non-empty directory at the store path makes the rename fail.
+	if err := os.MkdirAll(filepath.Join(path, "block"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(sampleRecord("r1")); err != nil {
+		t.Fatalf("first Put returned %v before any write ran", err)
+	}
+	eventually(t, "background write error", func() bool { return s.LastError() != nil })
+	if !strings.Contains(s.LastError().Error(), "replacing store") {
+		t.Errorf("LastError = %v", s.LastError())
+	}
+	// Put reports the outstanding failure but still keeps the record.
+	if err := s.Put(sampleRecord("r2")); err == nil {
+		t.Error("Put after a failed background write returned nil")
+	}
+	if _, ok := s.Get("r2"); !ok {
+		t.Error("record dropped after a failed write")
+	}
+
+	// Once the path is usable again the next write clears the error.
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSync(sampleRecord("r3")); err != nil {
+		t.Fatalf("PutSync after recovery: %v", err)
+	}
+	if err := s.LastError(); err != nil {
+		t.Errorf("LastError after a good write = %v", err)
+	}
+	for _, room := range []string{"r1", "r2", "r3"} {
+		if !fileHasRoom(path, room) {
+			t.Errorf("%s not on disk after recovery", room)
+		}
+	}
+}
+
+func TestStore_CloseReportsFlushError(t *testing.T) {
+	setVar(t, &storeFlushInterval, time.Hour)
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	if err := s.Put(sampleRecord("r1")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "first write", func() bool { return fileHasRoom(path, "r1") })
+	// The writer is idle (holding off for an hour), so swapping rename
+	// here does not race it.
+	s.writeMu.Lock()
+	s.rename = func(string, string) error { return errors.New("disk full") }
+	s.writeMu.Unlock()
+	if err := s.Put(sampleRecord("r2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Errorf("Close with a failing flush = %v, want the write error", err)
+	}
+	if exists(filepath.Join(filepath.Dir(path), lockFileName)) {
+		t.Error("Close kept the lock after a failed flush")
+	}
+}
+
+// ---- rename retry ----
+
+func TestRenameRetry(t *testing.T) {
+	denied := &os.LinkError{Op: "rename", Old: "a", New: "b", Err: os.ErrPermission}
+	tests := []struct {
+		name      string
+		failures  int
+		failErr   error
+		tries     int
+		wantCalls int
+		wantErr   bool
+	}{
+		{"first try", 0, denied, 5, 1, false},
+		{"transient", 3, denied, 5, 4, false},
+		{"last try", 4, denied, 5, 5, false},
+		{"persistent", 10, denied, 5, 5, true},
+		{"missing source not retried", 10, &os.LinkError{Op: "rename", Err: os.ErrNotExist}, 5, 1, true},
+		{"single try", 10, denied, 1, 1, true},
+		{"zero tries means one", 10, denied, 0, 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			fake := func(oldpath, newpath string) error {
+				calls++
+				if oldpath != "old" || newpath != "new" {
+					t.Errorf("rename(%q, %q)", oldpath, newpath)
+				}
+				if calls <= tt.failures {
+					return tt.failErr
+				}
+				return nil
+			}
+			err := renameRetry(fake, tt.tries, time.Microsecond, "old", "new")
+			if (err != nil) != tt.wantErr {
+				t.Errorf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && !errors.Is(err, tt.failErr) {
+				t.Errorf("err = %v, want the rename error", err)
+			}
+			if calls != tt.wantCalls {
+				t.Errorf("calls = %d, want %d", calls, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestStore_RenameRetriedOnWrite(t *testing.T) {
+	path := storePath(t)
+	s := mustOpen(t, path, testOwner)
+	fails := 2
+	flaky := func(oldpath, newpath string) error {
+		if fails > 0 {
+			fails--
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldpath, newpath)
+	}
+	s.rename = func(oldpath, newpath string) error {
+		return renameRetry(flaky, 5, time.Millisecond, oldpath, newpath)
+	}
+	if err := s.PutSync(sampleRecord("r")); err != nil {
+		t.Fatalf("PutSync with a transiently failing rename: %v", err)
+	}
+	if fails != 0 {
+		t.Errorf("rename failures left = %d; the store did not go through s.rename", fails)
+	}
+	if !fileHasRoom(path, "r") {
+		t.Error("record not on disk")
+	}
+	if tmps := tmpFiles(t, path); len(tmps) != 0 {
+		t.Errorf("tmp files left: %v", tmps)
+	}
+}
+
+func TestDefaultRenameTries(t *testing.T) {
+	want := 1
+	if runtime.GOOS == "windows" {
+		want = 5
+	}
+	if got := defaultRenameTries(); got != want {
+		t.Errorf("defaultRenameTries() = %d, want %d", got, want)
 	}
 }
