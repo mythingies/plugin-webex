@@ -194,8 +194,12 @@ type Draft struct {
 
 // Record is the persisted state of one DM room.
 type Record struct {
-	RoomID        string    `json:"room_id"`
-	HeadID        string    `json:"head_id"` // the burst head this state applies to
+	RoomID string `json:"room_id"`
+	HeadID string `json:"head_id"` // the burst head this state applies to
+	// HeadCreated is the head's created time. A different head re-opens a
+	// dismissed, sent, or snoozed room only if it is newer than this, so
+	// deleting the newest message does not bring a room back.
+	HeadCreated   time.Time `json:"head_created,omitempty"`
 	State         State     `json:"state"`
 	Draft         *Draft    `json:"draft,omitempty"`
 	DismissReason string    `json:"dismiss_reason,omitempty"`
@@ -247,6 +251,7 @@ type DraftView struct {
 // ItemView is one room in the inbox.
 type ItemView struct {
 	RoomID      string     `json:"room_id"`
+	HeadID      string     `json:"head_id"` // the burst head the UI is showing; echoed in SendRequest
 	Title       string     `json:"title"`
 	State       State      `json:"state"`
 	Since       string     `json:"since"`
@@ -278,6 +283,7 @@ type StatusView struct {
 // SendRequest is POST /api/send.
 type SendRequest struct {
 	RoomID       string `json:"room_id"`
+	HeadID       string `json:"head_id"` // ItemView.HeadID the user was looking at; a mismatch is new_messages
 	Text         string `json:"text"`
 	TextSHA256   string `json:"text_sha256"`   // hex sha256 of Text as confirmed by the user
 	AckSanitized bool   `json:"ack_sanitized"` // the user saw and accepted the sanitized version
@@ -304,4 +310,7 @@ const (
 	CodeNotPending     = "not_pending" // unknown room, or already sent/dismissed
 	CodeRateLimited    = "rate_limited"
 	CodeSendUnknown    = "send_unknown"
+	CodeBusy           = "busy"        // 409: a draft is already running and the request carries an instruction
+	CodeDrafterOff     = "drafter_off" // 400: drafting is unavailable
+	CodeSignedOut      = "signed_out"  // 409: --logout/--switch ran while this process was open
 )

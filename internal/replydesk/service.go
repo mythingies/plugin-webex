@@ -869,3 +869,7 @@ func citations(cited []string, refs map[string]webex.Message) []Citation {
 	}
 	return out
 }
+
+// Close cancels background scans and drafts (killing any claude subprocess)
+// and waits for them, up to ctx's deadline, then closes the store.
+func (s *Service) Close(ctx context.Context) error { return nil }

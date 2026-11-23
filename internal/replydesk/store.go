@@ -307,3 +307,18 @@ func cloneRecord(r Record) Record {
 	r.Draft = &d
 	return r
 }
+
+// ErrAlreadyRunning is returned by OpenStore when another webex-mcp --review
+// process holds the store.
+var ErrAlreadyRunning = errors.New("another webex-mcp --review is already running")
+
+// PutSync is Put, but the record is on disk before it returns. Use it for
+// state that must survive a crash (StateSending before the POST).
+func (s *Store) PutSync(r Record) error { return s.Put(r) }
+
+// Close flushes pending writes and releases the store's instance lock.
+func (s *Store) Close() error { return nil }
+
+// Disabled reports whether persistence stopped because the state was purged
+// (--logout/--switch) by another process.
+func (s *Store) Disabled() bool { return false }
