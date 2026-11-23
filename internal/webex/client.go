@@ -92,6 +92,13 @@ type Message struct {
 	Created     string   `json:"created"`
 	ParentID    string   `json:"parentId,omitempty"`
 	Files       []string `json:"files,omitempty"`
+
+	Markdown        string            `json:"markdown,omitempty"`
+	Updated         string            `json:"updated,omitempty"` // present only when the author edited the message
+	MentionedPeople []string          `json:"mentionedPeople,omitempty"`
+	MentionedGroups []string          `json:"mentionedGroups,omitempty"`
+	Attachments     []json.RawMessage `json:"attachments,omitempty"` // adaptive cards; content is not interpreted
+	IsVoiceClip     bool              `json:"isVoiceClip,omitempty"`
 }
 
 // Person represents a Webex user.
