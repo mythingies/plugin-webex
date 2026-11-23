@@ -366,7 +366,7 @@ func TestReadReceiptInvariantThroughServe(t *testing.T) {
 		resp, err := hc.Get(rs.launchURL())
 		if err == nil {
 			for _, c := range resp.Cookies() {
-				if c.Name == sessionCookieName {
+				if c.Name == rs.cookieName {
 					cookie = c
 				}
 			}
@@ -388,11 +388,11 @@ func TestReadReceiptInvariantThroughServe(t *testing.T) {
 		}
 		req, _ := http.NewRequest(method, rs.origin+path, rd)
 		req.AddCookie(cookie)
+		req.Header.Set(csrfHeaderName, rs.csrf) // required on every /api/* request, GETs included
 		if method == http.MethodPost {
 			req.Header.Set("Origin", rs.origin)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set(csrfHeaderName, rs.csrf)
 		}
 		resp, err := hc.Do(req)
 		if err != nil {

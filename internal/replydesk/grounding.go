@@ -77,6 +77,7 @@ func (s *Service) priorMessages(ctx context.Context, p *Pending) []webex.Message
 		}
 		msgs, err := s.api.ListMessages(webex.ListMessagesOptions{RoomID: p.RoomID, BeforeMessage: before, Max: groundPageSize})
 		if err != nil {
+			s.noteAuthErr(err)
 			slog.Warn("replydesk: grounding history fetch failed; drafting with what was fetched", "room_id", p.RoomID, "err", err)
 			break
 		}

@@ -256,7 +256,7 @@ func (h *harness) running() bool {
 
 func (h *harness) do(req *http.Request) (*http.Response, []byte) {
 	h.t.Helper()
-	resp, err := h.client.Do(req)
+	resp, err := h.client.Do(req) // #nosec G704 -- test client talks to the loopback server under test
 	if err != nil {
 		h.t.Fatalf("%s %s: %v", req.Method, req.URL.Path, err)
 	}

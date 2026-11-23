@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mythingies/plugin-webex/internal/auth"
 	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
@@ -2189,6 +2190,12 @@ func TestSendRefusedWhenSendingRecordCannotBeSaved(t *testing.T) {
 	if err := os.WriteFile(dir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Cleanups run last-in first-out: put the directory back before the
+	// service's Close flushes the store.
+	t.Cleanup(func() {
+		_ = os.Remove(dir)
+		_ = os.MkdirAll(dir, 0o700)
+	})
 
 	_, status, e := s.Send(context.Background(), sendReq(s, "r", "hi"))
 	if e == nil || status < 400 || (e.Code != codeInternal && e.Code != CodeSignedOut) {
@@ -2208,4 +2215,28 @@ func TestSendRefusedWhenSendingRecordCannotBeSaved(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("send slots used = %d", n)
 	}
+}
+
+// A sign-out detected by the token provider (another process ran --logout or
+// --switch) shows the signed-out message and refuses sends without posting.
+func TestAuthSignedOutSurfacesAndBlocksSend(t *testing.T) {
+	api := newFakeAPI()
+	api.addRoom("r", "Alice", theirs("t1", time.Minute))
+	s, _ := newTestService(t, api, newFakeDrafter())
+	rescan(s)
+
+	if !s.noteAuthErr(fmt.Errorf("getting access token: %w", auth.ErrSignedOut)) {
+		t.Fatal("noteAuthErr did not recognize a wrapped auth.ErrSignedOut")
+	}
+	if s.noteAuthErr(errors.New("unrelated")) {
+		t.Fatal("noteAuthErr matched an unrelated error")
+	}
+	if got := s.Status().Error; got != msgSignedOut {
+		t.Fatalf("Status().Error = %q, want the signed-out message", got)
+	}
+	_, status, e := s.Send(context.Background(), sendReq(s, "r", "hi"))
+	if e == nil || e.Code != CodeSignedOut || status != http.StatusConflict {
+		t.Fatalf("Send = %d %v, want 409 signed_out", status, e)
+	}
+	assertNoSend(t, api)
 }

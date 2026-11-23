@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mythingies/plugin-webex/internal/auth"
 	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
@@ -295,6 +296,9 @@ type Service struct {
 	// signedOut reports whether the stored state was purged by --logout or
 	// --switch in another process. It is store.Disabled; tests replace it.
 	signedOut func() bool
+	// authSignedOut is set once a Webex call failed with auth.ErrSignedOut:
+	// --logout or --switch ran in another process. Guarded by mu.
+	authSignedOut bool
 
 	draftSem     chan struct{}
 	draftTimeout time.Duration
@@ -365,7 +369,7 @@ func NewService(cfg Config) (*Service, error) {
 	if name == "" {
 		name = me.NickName
 	}
-	rootCtx, rootCancel := context.WithCancel(context.Background())
+	rootCtx, rootCancel := context.WithCancel(context.Background()) // #nosec G118 -- rootCancel is kept on the Service and called by Close
 	s := &Service{
 		api:          cfg.API,
 		drafter:      cfg.Drafter,
@@ -432,7 +436,19 @@ func (s *Service) Close(ctx context.Context) error {
 // isSignedOutLocked reports whether --logout or --switch purged the state
 // in another process. s.mu must be held.
 func (s *Service) isSignedOutLocked() bool {
-	return s.signedOut != nil && s.signedOut()
+	return s.authSignedOut || (s.signedOut != nil && s.signedOut())
+}
+
+// noteAuthErr records a sign-out detected by the token provider. It reports
+// whether err was one.
+func (s *Service) noteAuthErr(err error) bool {
+	if !errors.Is(err, auth.ErrSignedOut) {
+		return false
+	}
+	s.mu.Lock()
+	s.authSignedOut = true
+	s.mu.Unlock()
+	return true
 }
 
 // signedOutErr is returned by every state-changing action once the state
@@ -777,6 +793,7 @@ func (s *Service) Rescan(ctx context.Context) {
 }
 
 func (s *Service) finishScan(res scanResult) {
+	s.noteAuthErr(res.err)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

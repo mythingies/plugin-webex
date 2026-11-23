@@ -187,6 +187,22 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 	}
 
 	msg, err := s.api.SendMessage(p.RoomID, "", "", p.ParentID, sanitized, "")
+	if err != nil && s.noteAuthErr(err) {
+		// The token provider refused before any request was made (the client
+		// fetches the token first), so nothing went out: put the room back.
+		restore := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StatePending}
+		if has {
+			restore = r
+		}
+		s.mu.Lock()
+		if err := s.store.Put(restore); err != nil {
+			slog.Warn("replydesk: restoring state after sign-out", "err", err)
+		}
+		s.mu.Unlock()
+		s.doneSending(p.RoomID)
+		s.releaseSend(slot)
+		return "", http.StatusConflict, signedOutErr()
+	}
 	if err != nil || msg == nil {
 		if err == nil {
 			err = errors.New("webex returned no message")
@@ -268,6 +284,9 @@ func (s *Service) recheck(p *Pending) (int, *APIError) {
 		if errors.Is(err, webex.ErrNotFound) {
 			return http.StatusConflict, &APIError{Code: CodeAskDeleted, Detail: "the message you are answering was deleted"}
 		}
+		if s.noteAuthErr(err) {
+			return http.StatusConflict, signedOutErr()
+		}
 		return recheckErr(err)
 	}
 	if head == nil {
@@ -279,6 +298,9 @@ func (s *Service) recheck(p *Pending) (int, *APIError) {
 
 	msgs, err := s.api.ListMessages(webex.ListMessagesOptions{RoomID: p.RoomID, Max: recheckPageSize})
 	if err != nil {
+		if s.noteAuthErr(err) {
+			return http.StatusConflict, signedOutErr()
+		}
 		return recheckErr(err)
 	}
 	headIdx := slices.IndexFunc(msgs, func(m webex.Message) bool { return m.ID == p.HeadID })

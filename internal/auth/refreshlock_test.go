@@ -37,6 +37,7 @@ func newFakeTokenEndpoint(t *testing.T) *fakeTokenEndpoint {
 	f := &fakeTokenEndpoint{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := f.hits.Add(1)
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "bad form", http.StatusBadRequest)
 			return
@@ -532,7 +533,7 @@ func TestTokenFreshDoesNotTouchLockOrStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	shortLockTimings(t, 5*time.Second)
-	p := &OAuthProvider{
+	p := &OAuthProvider{ // #nosec G101 -- test fixture tokens, not credentials
 		store: store,
 		tokens: &StoredTokens{
 			AccessToken:          "fresh",

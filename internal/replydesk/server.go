@@ -49,10 +49,7 @@ const (
 	// cookie; the suffix keeps one review server from accepting, or
 	// overwriting, another's session.
 	sessionCookiePrefix = "rd_s"
-	// sessionCookieName is the bare prefix, kept only so older callers still
-	// compile. No cookie has this name any more: match reviewServer.cookieName.
-	sessionCookieName = sessionCookiePrefix
-	csrfHeaderName    = "X-ReplyDesk-CSRF"
+	csrfHeaderName      = "X-ReplyDesk-CSRF"
 	// csrfFragment is the URL fragment key /login redirects with. A fragment
 	// is never sent to a server or in a Referer, and app.js removes it.
 	csrfFragment      = "csrf"
@@ -488,7 +485,7 @@ func (s *reviewServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if reason != "" {
 		s.mu.Unlock()
 		// Never log the token itself.
-		slog.Warn("replydesk: launch token rejected", "reason", reason, "remote", r.RemoteAddr)
+		slog.Warn("replydesk: launch token rejected", "reason", reason, "remote", r.RemoteAddr) // #nosec G706 -- reason is a fixed string and RemoteAddr is the TCP peer set by net/http
 		writeHTML(w, http.StatusForbidden, []byte(forbiddenPage))
 		return
 	}
