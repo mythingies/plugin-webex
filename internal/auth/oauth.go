@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,13 @@ const (
 	callbackFileName = "oauth-callback.json"
 )
 
+// ErrSignedOut means the stored OAuth session this process was using has
+// gone: another process ran --logout (the store is empty) or --switch (the
+// store holds a different session). The process stops using its in-memory
+// tokens rather than act as, or save over, the other account. Restarting
+// picks up whatever session is stored now.
+var ErrSignedOut = errors.New("the signed-in Webex account changed or signed out; restart this process")
+
 // OAuthConfig holds the OAuth integration credentials.
 type OAuthConfig struct {
 	ClientID     string
@@ -63,6 +71,20 @@ type OAuthProvider struct {
 	// processes are serialised by the refresh lock file (refreshlock.go).
 	mu     sync.Mutex
 	tokens *StoredTokens
+
+	// sessionID identifies the authorization the in-memory tokens belong
+	// to (StoredTokens.SessionID). Only stored tokens with the same session
+	// ID are adopted. Empty for legacy sessions saved without one.
+	sessionID string
+
+	// persisted reports that the in-memory session has been in the store
+	// (loaded from it or saved to it). Only then does an empty store mean
+	// another process signed out, rather than that our own save failed.
+	persisted bool
+
+	// signedOut is set once another process signed out or switched
+	// accounts. Token returns ErrSignedOut until a new authorization.
+	signedOut bool
 
 	httpClient *http.Client
 
@@ -109,7 +131,7 @@ func NewOAuthProvider(config OAuthConfig) (*OAuthProvider, error) {
 	// Try to load existing tokens.
 	tokens, err := store.Load()
 	if err == nil {
-		p.tokens = tokens
+		p.setSession(tokens, true)
 		slog.Info("loaded stored OAuth tokens", "expires_at", tokens.AccessTokenExpiresAt.Format(time.RFC3339))
 	}
 
@@ -122,6 +144,9 @@ func (p *OAuthProvider) Token() (string, error) {
 	defer p.mu.Unlock()
 
 	if p.tokens == nil {
+		if p.signedOut {
+			return "", fmt.Errorf("not authenticated: %w", ErrSignedOut)
+		}
 		return "", fmt.Errorf("not authenticated; run OAuth authorization flow first")
 	}
 
@@ -136,7 +161,9 @@ func (p *OAuthProvider) Token() (string, error) {
 	release, _ := acquireRefreshLock(p.refreshLockDir())
 	defer release()
 
-	p.adoptStoredTokens()
+	if err := p.adoptStoredTokens(); err != nil {
+		return "", err
+	}
 	if accessTokenFresh(p.tokens) {
 		// Another process refreshed while we waited or since we loaded.
 		slog.Debug("adopted OAuth token refreshed by another process")
@@ -158,28 +185,69 @@ func (p *OAuthProvider) Token() (string, error) {
 // tokens when the stored ones are newer: either the stored access token is
 // still fresh, or the stored refresh token is usable (so a refresh uses the
 // newest refresh token, which matters if the endpoint rotated it). The
-// in-memory tokens are kept when the store is empty, unreadable, or holds a
-// session for a different OAuth client.
+// in-memory tokens are kept when the store is unreadable or holds a session
+// for a different OAuth client.
+//
+// Only a stored session with this provider's session ID is adopted. A
+// different one means another process ran --switch (or --setup --force),
+// and an empty store means it ran --logout. Either way this process is
+// signed out: it drops its tokens, does not refresh or save them back, and
+// gets an error wrapping ErrSignedOut. Legacy sessions with no session ID
+// on either side still adopt each other.
 //
 // Callers must hold p.mu and should hold the refresh lock.
-func (p *OAuthProvider) adoptStoredTokens() {
+func (p *OAuthProvider) adoptStoredTokens() error {
 	if p.store == nil {
-		return
+		return nil
 	}
 	stored, err := p.store.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		if !p.persisted {
+			// Our session never reached the store (its save failed), so
+			// an empty store says nothing about a sign-out.
+			return nil
+		}
+		slog.Warn("stored OAuth tokens were removed by another process; signing out")
+		p.signOut()
+		return fmt.Errorf("stored OAuth session removed: %w", ErrSignedOut)
+	}
 	if err != nil || stored == nil {
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
 			slog.Warn("could not reload stored OAuth tokens; using in-memory tokens", "error", err)
 		}
-		return
+		return nil
 	}
 	if stored.ClientID != "" && p.config.ClientID != "" && stored.ClientID != p.config.ClientID {
 		slog.Debug("stored OAuth tokens belong to a different client; not adopting")
-		return
+		return nil
+	}
+	if stored.SessionID != p.sessionID {
+		slog.Warn("stored OAuth tokens belong to a different session; signing out")
+		p.signOut()
+		return fmt.Errorf("stored OAuth session replaced: %w", ErrSignedOut)
 	}
 	if accessTokenFresh(stored) || refreshTokenUsable(stored) {
-		p.tokens = stored
+		p.setSession(stored, true)
 	}
+	return nil
+}
+
+// setSession makes t the in-memory session. persisted reports whether t is
+// known to be in the store. Callers must hold p.mu or own p exclusively.
+func (p *OAuthProvider) setSession(t *StoredTokens, persisted bool) {
+	p.tokens = t
+	p.sessionID = t.SessionID
+	p.persisted = persisted
+	p.signedOut = false
+}
+
+// signOut drops the in-memory session after another process signed out or
+// switched accounts. Callers must hold p.mu.
+func (p *OAuthProvider) signOut() {
+	p.tokens = nil
+	p.sessionID = ""
+	p.persisted = false
+	p.signedOut = true
 }
 
 // refreshLockDir is the directory for the cross-process refresh lock: the
@@ -383,6 +451,9 @@ func (p *OAuthProvider) Logout() error {
 	defer p.mu.Unlock()
 
 	p.tokens = nil
+	p.sessionID = ""
+	p.persisted = false
+	p.signedOut = false
 	return p.store.Delete()
 }
 
@@ -395,7 +466,16 @@ func (p *OAuthProvider) exchangeCode(code, redirectURI, codeVerifier string) err
 	data.Set("redirect_uri", redirectURI)
 	data.Set("code_verifier", codeVerifier)
 
-	return p.doTokenRequest(data)
+	// A fresh authorization starts a new session. Its ID is what lets
+	// other processes tell it apart from the session they hold.
+	sessionID, err := newSessionID()
+	if err != nil {
+		return fmt.Errorf("generating session id: %w", err)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.doTokenRequest(data, sessionID)
 }
 
 func (p *OAuthProvider) refresh() error {
@@ -405,7 +485,8 @@ func (p *OAuthProvider) refresh() error {
 	data.Set("client_secret", p.config.ClientSecret)
 	data.Set("refresh_token", p.tokens.RefreshToken)
 
-	if err := p.doTokenRequest(data); err != nil {
+	// A refresh continues the current session, so it keeps its ID.
+	if err := p.doTokenRequest(data, p.sessionID); err != nil {
 		return err
 	}
 
@@ -413,7 +494,10 @@ func (p *OAuthProvider) refresh() error {
 	return nil
 }
 
-func (p *OAuthProvider) doTokenRequest(data url.Values) error {
+// doTokenRequest posts data to the token endpoint and, on success, makes the
+// returned tokens the in-memory session sessionID and saves them. Callers
+// must hold p.mu.
+func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) error {
 	client := p.httpClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -474,19 +558,35 @@ func (p *OAuthProvider) doTokenRequest(data url.Values) error {
 	}
 
 	now := time.Now()
-	p.tokens = &StoredTokens{
+	tokens := &StoredTokens{
 		AccessToken:           tokenResp.AccessToken,
 		RefreshToken:          tokenResp.RefreshToken,
 		AccessTokenExpiresAt:  now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		RefreshTokenExpiresAt: now.Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second),
 		ClientID:              p.config.ClientID,
+		SessionID:             sessionID,
 	}
 
-	if err := p.store.Save(p.tokens); err != nil {
-		slog.Warn("failed to persist tokens", "error", err)
+	persisted := false
+	if p.store != nil {
+		if err := p.store.Save(tokens); err != nil {
+			slog.Warn("failed to persist tokens", "error", err)
+		} else {
+			persisted = true
+		}
 	}
+	p.setSession(tokens, persisted)
 
 	return nil
+}
+
+// newSessionID returns a random identifier for a new OAuth authorization.
+func newSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func generateCodeVerifier() (string, error) {

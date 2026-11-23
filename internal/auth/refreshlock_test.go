@@ -104,7 +104,7 @@ func newTestProvider(t *testing.T, store *TokenStore, endpoint string) *OAuthPro
 	if err != nil {
 		t.Fatalf("loading store: %v", err)
 	}
-	p.tokens = tokens
+	p.setSession(tokens, true)
 	return p
 }
 
@@ -341,7 +341,7 @@ func TestTokenHeldLockTimesOutAndRefreshes(t *testing.T) {
 		t.Errorf("expected timeout warning, got:\n%s", logs.String())
 	}
 	// The other holder's lock must be left alone.
-	got, err := os.ReadFile(lp)
+	got, err := os.ReadFile(lp) // #nosec G304 -- test reads its own temp-dir file
 	if err != nil {
 		t.Fatalf("foreign lock was removed: %v", err)
 	}
@@ -380,7 +380,9 @@ func TestTokenRefreshTokenSelection(t *testing.T) {
 			want:   "refresh-mem",
 		},
 		{
-			name:   "store missing",
+			// The in-memory session was never saved (the save failed),
+			// so an empty store is not a sign-out.
+			name:   "store missing and session never saved",
 			memory: staleTokens("refresh-mem"),
 			stored: nil,
 			want:   "refresh-mem",
@@ -649,7 +651,7 @@ func TestRefreshLockContentsAndRelease(t *testing.T) {
 		t.Fatal("lock not acquired")
 	}
 	p := filepath.Join(dir, refreshLockName)
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) // #nosec G304 -- test reads its own temp-dir file
 	if err != nil {
 		t.Fatal(err)
 	}

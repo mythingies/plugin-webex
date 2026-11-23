@@ -32,6 +32,12 @@ type StoredTokens struct {
 	// without asking for the client ID again. Empty for sessions saved
 	// before v0.9.6 until their next token refresh.
 	ClientID string `json:"client_id,omitempty"`
+	// SessionID identifies one authorization: it is generated when an
+	// authorization code is exchanged and carried across refreshes. A
+	// running process only adopts stored tokens with its own session ID,
+	// so after --switch it does not take over the new account. Empty for
+	// sessions authorized before it existed.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // TokenStore handles persistent OAuth token storage. It prefers the OS
