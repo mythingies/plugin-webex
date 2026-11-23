@@ -13,7 +13,7 @@ plugin-webex is a Go 1.26 MCP server plugin that bridges untrusted Webex message
 
 - **Languages**: Go 1.26
 - **AI Components**: Yes — MCP server providing tools to Claude Code LLM; agent routing engine; 6 agent definitions; 2 skills
-- **Entry Points**: `cmd/webex-mcp/main.go` (stdio MCP server), `internal/setup/setup.go` (localhost:8899 HTTP setup wizard)
+- **Entry Points**: `cmd/webex-mcp/main.go` (stdio MCP server), `internal/setup/setup.go` (setup wizard on `127.0.0.1`, random port, while `--setup` runs), `internal/replydesk/server.go` (Reply Desk review UI on `127.0.0.1`, random port, while `--review` runs; see the 2026-11-23 addendum)
 - **External Dependencies**: mark3labs/mcp-go v0.44.1, 3rg0n/webex-message-handler v0.6.0, gopkg.in/yaml.v3
 - **External APIs**: Webex REST API (https://webexapis.com/v1/*), Webex Mercury WebSocket
 - **Agentic Risk Factors**:
@@ -330,3 +330,42 @@ After remediation, the residual risk profile is:
 - F1: Migrate token storage to OS keychain (macOS Keychain, Windows Credential Manager, Linux libsecret)
 - F13: Add GPG release signing and SLSA build provenance attestation
 - F18: Update `mark3labs/mcp-go` when `buger/jsonparser` fix propagates
+
+## Addendum 2026-11-23: Reply Desk (ADR 0002)
+
+`webex-mcp --review` adds a second local surface: a loopback web UI that lists unanswered direct messages, a `claude -p` subprocess that drafts replies, and a send path. See `docs/adr/0002-reply-desk.md`.
+
+### New trust boundaries
+
+```
+TB7: Browser ←→ Reply Desk UI (http://127.0.0.1:<random port>)
+     Single-use launch token (2 min) → HttpOnly SameSite=Strict session cookie.
+     Exact Host check on every request (DNS rebinding). Non-GET: exact Origin
+     required, Sec-Fetch-Site same-origin, per-session CSRF header, JSON only,
+     64 KB bodies. Strict CSP, no framing. Idle 30 min / 8 h lifetime.
+
+TB8: Reply Desk ←→ drafter subprocess (claude -p)
+     Input: the burst, context, and the user's own earlier messages in the
+     same DM, all wrapped by safetext.Sandbox; Webex IDs replaced by local refs.
+     The subprocess has no tools, no MCP servers, no session persistence, an
+     empty temp cwd, and an env allowlist without WEBEX_*. Output: JSON only,
+     validated in Go. It cannot send, read files, or call Webex.
+
+TB9: Reply Desk ←→ Webex REST (send)
+     The only write. Target computed server-side from the scan; text bound by
+     SHA-256 to what the user confirmed; live re-check (deleted / edited /
+     already replied / new messages) before POST; no automatic retry.
+```
+
+### Findings
+
+| # | Finding | Severity | Status | Remediation |
+|---|---------|----------|--------|-------------|
+| F19 | `sandboxText()` did not escape its own wrapper, so REST-sourced text containing `</external-message>` could close the sandbox early (affected existing tools, not only Reply Desk) | High | **Remediated** | `safetext.Sandbox` neutralizes opening and closing wrapper tags case-insensitively, with whitespace variants; all tools use it. Regression tests in `internal/safetext`. |
+| F20 | OAuth refresh was process-local; concurrent processes (several Claude Code sessions, `--review`) could refresh the same stored tokens at once | Medium | **Remediated** | Cross-process `refresh.lock` in the config dir; under the lock the provider reloads stored tokens and refreshes only if they are still stale. |
+| F21 | Loopback review UI could be driven by another local web origin (CSRF, DNS rebinding, other 127.0.0.1 ports are same-site) | High | **Mitigated** | TB7 controls above. SameSite is not relied on alone, because cookies ignore ports. Residual: same-user malware or browser extensions are out of scope. |
+| F22 | Prompt injection in an inbound DM steering the drafter to leak data or act | High | **Mitigated** | The drafter is tool-less and MCP-less (TB8); retrieval is limited to the same DM, so nothing from other conversations can leak; a human approves every send; drafts with sandbox markup are rejected; `[[FILL]]` placeholders block sending. Residual: a misleading draft the user approves without reading. |
+| F23 | Drafts and excerpts of the user's messages at rest | Medium | **Mitigated** | `replydesk.json` 0600 + Windows ACL, atomic writes, bound to the owner person ID, pruned after 30 days, purged by `--logout` / `--switch`. Citations capped at 500 bytes. |
+| F24 | Outbound `<@all>` broadcast mention not blocked by the scheme filter | Low | **Remediated** | `safetext.Sanitize` replaces `<@all>` with `[blocked-mention]`. `<@personEmail:…>` / `<@personId:…>` were already neutralized by the scheme rule. |
+| F25 | Read-receipt invariant: Reply Desk reads many DMs | Medium | **Mitigated** | Only REST GETs during scan and draft (asserted by a recording-server test); `POST /messages` only on explicit send. No acknowledge or mark-as-read calls exist. Manual release check: GETs leave unread badges and the sender's "seen" state unchanged. |
+| F26 | `isolated` drafter mode loads the user's Claude Code hooks/plugins | Low | **Accepted** | Needed for subscription auth (`--bare` reads only API keys / provider credentials). Still no tools and no MCP; output is JSON a human reviews. `bare` is chosen automatically when an API key or Bedrock/Vertex/Foundry is configured. |

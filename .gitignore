@@ -1,7 +1,7 @@
 # Binaries
 bin/
-webex-mcp
-webex-mcp.exe
+/webex-mcp
+/webex-mcp.exe
 *.exe
 *.dll
 *.so

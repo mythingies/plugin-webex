@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mythingies/plugin-webex/internal/auth"
+	"github.com/mythingies/plugin-webex/internal/replydesk"
 )
 
 // ExistingAuth describes a currently-stored OAuth session.
@@ -79,10 +80,11 @@ func evalExistingAuth(tokens *auth.StoredTokens, now time.Time, validate func(st
 	return nil
 }
 
-// Logout removes stored OAuth tokens so the next setup run authenticates from
-// scratch (used by --switch and --logout). The OAuth client secret is left in
-// place — switching Webex user under the same integration only needs the
-// tokens cleared. A missing token entry is not an error.
+// Logout removes stored OAuth tokens and Reply Desk state so the next setup
+// run authenticates from scratch (used by --switch and --logout). The OAuth
+// client secret is left in place — switching Webex user under the same
+// integration only needs the tokens cleared. A missing token entry is not an
+// error.
 func Logout() error {
 	store, err := auth.NewTokenStore()
 	if err != nil {
@@ -91,5 +93,7 @@ func Logout() error {
 	if err := store.Delete(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return nil
+	// Reply Desk drafts and state belong to the signed-in account; the next
+	// account must not inherit them (ADR 0002).
+	return replydesk.Purge()
 }
