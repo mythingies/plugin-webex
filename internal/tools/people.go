@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -42,7 +43,7 @@ func registerGetUsers(s *mcpserver.MCPServer, client *webex.Client) {
 			if len(m.Emails) > 0 {
 				email = m.Emails[0]
 			}
-			text += fmt.Sprintf("- **%s** (%s, id: %s)\n", m.DisplayName, email, m.ID)
+			text += fmt.Sprintf("- **%s** (%s, id: %s)\n", safetext.Label(m.DisplayName), email, m.ID)
 		}
 		if text == "" {
 			text = "No members found."
@@ -83,7 +84,7 @@ func registerGetUserProfile(s *mcpserver.MCPServer, client *webex.Client) {
 		}
 
 		text := fmt.Sprintf("**%s** (%s)\n- Email: %s\n- Status: %s\n- Type: %s\n- Created: %s\n",
-			person.DisplayName, person.NickName, email, person.Status, person.Type, person.Created)
+			safetext.Label(person.DisplayName), safetext.Label(person.NickName), email, person.Status, person.Type, person.Created)
 
 		return mcp.NewToolResultText(text), nil
 	})

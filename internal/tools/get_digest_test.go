@@ -13,7 +13,7 @@ func TestTopN(t *testing.T) {
 		"dave@test.com":  15,
 	}
 
-	result := topN(counts, 2)
+	result := topN(counts, 2, identity)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(result))
 	}
@@ -30,14 +30,14 @@ func TestTopNMoreThanAvailable(t *testing.T) {
 		"alice@test.com": 10,
 	}
 
-	result := topN(counts, 5)
+	result := topN(counts, 5, identity)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(result))
 	}
 }
 
 func TestTopNEmpty(t *testing.T) {
-	result := topN(map[string]int{}, 3)
+	result := topN(map[string]int{}, 3, identity)
 	if len(result) != 0 {
 		t.Fatalf("expected 0 results, got %d", len(result))
 	}
@@ -52,7 +52,7 @@ func TestTopNStableSort(t *testing.T) {
 		"c@test.com": 5,
 	}
 
-	result := topN(counts, 3)
+	result := topN(counts, 3, identity)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(result))
 	}

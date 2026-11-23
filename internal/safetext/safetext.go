@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // MaxMessageLen is the Webex message limit, checked on the raw input in bytes
@@ -35,8 +36,115 @@ var wrapperTagRe = regexp.MustCompile(`(?i)<(\s*/?\s*external-message)`)
 // open a nested one. Nothing else is escaped: whitespace, newlines, and text
 // the listener already HTML-escaped ("&lt;/external-message&gt;") pass
 // through unchanged.
+//
+// A partial wrapper tag at the very end of text, such as the
+// "</external-messa" a truncation can leave behind, is neutralized the same
+// way, so it cannot run into the closing wrapper and read as a tag.
 func Sandbox(text string) string {
-	return "<external-message>" + wrapperTagRe.ReplaceAllString(text, "&lt;$1") + "</external-message>"
+	return "<external-message>" + escapeWrapperTags(text) + "</external-message>"
+}
+
+// SandboxPreview is Sandbox for a preview of text cut to at most maxRunes
+// runes. The cut lands on a rune boundary, "..." inside the wrapper marks
+// that text was cut, and a wrapper tag split by the cut is neutralized. A
+// maxRunes below 1 keeps the whole text.
+func SandboxPreview(text string, maxRunes int) string {
+	cut, ok := CutRunes(text, maxRunes)
+	if !ok {
+		return Sandbox(text)
+	}
+	return "<external-message>" + escapeWrapperTags(cut) + "...</external-message>"
+}
+
+// CutRunes returns the first max runes of s and true, or s unchanged and
+// false when s has no more than max runes or max is below 1. It never splits
+// a UTF-8 sequence.
+func CutRunes(s string, max int) (string, bool) {
+	if max < 1 {
+		return s, false
+	}
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i], true
+		}
+		n++
+	}
+	return s, false
+}
+
+// wrapperName is the tag name Sandbox wraps text in.
+const wrapperName = "external-message"
+
+// tagSpace is the whitespace wrapperTagRe's \s matches.
+const tagSpace = " \t\n\f\r"
+
+// escapeWrapperTags replaces the "<" of every whole wrapper tag in s, and of
+// a partial one at the very end of s, with "&lt;".
+func escapeWrapperTags(s string) string {
+	s = wrapperTagRe.ReplaceAllString(s, "&lt;$1")
+	i := strings.LastIndexByte(s, '<')
+	if i < 0 || !isPartialWrapperTag(s[i+1:]) {
+		return s
+	}
+	return s[:i] + "&lt;" + s[i+1:]
+}
+
+// isPartialWrapperTag reports whether rest, the text after a "<", is
+// optional whitespace, an optional "/", optional whitespace, and then a
+// non-empty case-insensitive prefix of the wrapper name, with nothing after
+// it.
+func isPartialWrapperTag(rest string) bool {
+	rest = strings.TrimLeft(rest, tagSpace)
+	rest = strings.TrimPrefix(rest, "/")
+	rest = strings.TrimLeft(rest, tagSpace)
+	return rest != "" && len(rest) <= len(wrapperName) && strings.EqualFold(rest, wrapperName[:len(rest)])
+}
+
+// MaxLabelRunes caps the length of a Label result, ellipsis included.
+const MaxLabelRunes = 120
+
+// labelReplacer swaps the characters that could start a tag (the Sandbox
+// wrapper included) or a code span for look-alikes that cannot.
+var labelReplacer = strings.NewReplacer("<", "‹", ">", "›", "`", "'")
+
+// Label cleans a short Webex-controlled label, such as a space title or a
+// display name, for one line of tool output. Control characters, newlines
+// and other whitespace become single spaces and the ends are trimmed;
+// bidirectional embedding, override and isolate characters are dropped; "<"
+// and ">" become "‹" and "›", so no tag, wrapper or otherwise,
+// survives; backticks become "'"; and the result is capped at MaxLabelRunes
+// runes, ending in "…" when cut. Message bodies take Sandbox, not Label.
+func Label(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	pendingSpace := false
+	for _, r := range s {
+		switch {
+		case isBidiControl(r):
+			continue
+		case unicode.IsControl(r) || unicode.IsSpace(r):
+			pendingSpace = b.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			b.WriteByte(' ')
+			pendingSpace = false
+		}
+		b.WriteRune(r)
+	}
+	out := labelReplacer.Replace(b.String())
+	if _, cut := CutRunes(out, MaxLabelRunes); cut {
+		head, _ := CutRunes(out, MaxLabelRunes-1)
+		out = strings.TrimRight(head, " ") + "…"
+	}
+	return out
+}
+
+// isBidiControl reports whether r is a Unicode bidirectional embedding,
+// override or isolate control, which can make a label render reordered.
+func isBidiControl(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
 }
 
 // allowedOutboundProtocols lists URL schemes safe for outbound messages.

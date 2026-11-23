@@ -104,10 +104,10 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 
 				// Capture first few messages as highlights.
 				if len(d.Highlights) < 5 {
-					preview := safetext.Sandbox(msg.Text)
-					if len(preview) > 200 {
-						preview = preview[:200] + "...</external-message>"
-					}
+					// Cut on a rune boundary before wrapping, so the
+					// wrapper stays whole and a tag split by the cut is
+					// still neutralized.
+					preview := safetext.SandboxPreview(msg.Text, digestPreviewRunes)
 					d.Highlights = append(d.Highlights, fmt.Sprintf("**%s**: %s", maskEmail(msg.PersonEmail), preview))
 				}
 			}
@@ -126,12 +126,12 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 		text += fmt.Sprintf("**%d space(s)** with **%d total messages**\n\n", len(digests), totalMessages)
 
 		for _, d := range digests {
-			text += fmt.Sprintf("### %s\n", d.Title)
+			text += fmt.Sprintf("### %s\n", safetext.Label(d.Title))
 			text += fmt.Sprintf("- Messages: %d\n", d.Messages)
 			text += fmt.Sprintf("- Active authors: %d\n", len(d.Authors))
 
-			// Top authors.
-			topAuthors := topN(d.Authors, 3)
+			// Top authors, counted by full address but shown masked.
+			topAuthors := topN(d.Authors, 3, maskEmail)
 			if len(topAuthors) > 0 {
 				text += fmt.Sprintf("- Top contributors: %s\n", strings.Join(topAuthors, ", "))
 			}
@@ -155,8 +155,13 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 	})
 }
 
-// topN returns the top n keys from a count map, formatted as "key (count)".
-func topN(counts map[string]int, n int) []string {
+// digestPreviewRunes caps each highlight's message text in get_digest.
+const digestPreviewRunes = 180
+
+// topN returns the top n keys from a count map, formatted as
+// "show(key) (count)". Keys are counted as given, so two keys that show the
+// same (two masked emails, say) still rank separately.
+func topN(counts map[string]int, n int, show func(string) string) []string {
 	type kv struct {
 		Key   string
 		Count int
@@ -176,7 +181,7 @@ func topN(counts map[string]int, n int) []string {
 
 	result := make([]string, n)
 	for i := 0; i < n; i++ {
-		result[i] = fmt.Sprintf("%s (%d)", sorted[i].Key, sorted[i].Count)
+		result[i] = fmt.Sprintf("%s (%d)", show(sorted[i].Key), sorted[i].Count)
 	}
 	return result
 }

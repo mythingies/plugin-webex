@@ -34,8 +34,7 @@ func registerGetNotifications(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 		text := fmt.Sprintf("%d notification(s):\n\n", len(messages))
 		agents := make([]string, 0, len(messages))
 		for _, msg := range messages {
-			text += fmt.Sprintf("- [%s] **%s** in **%s** (%s, agent: %s): %s\n",
-				msg.Priority, maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, safetext.Sandbox(msg.Text))
+			text += formatNotification(msg)
 			if msg.RoutedAgent != "" {
 				agents = append(agents, msg.RoutedAgent)
 			}
@@ -43,4 +42,12 @@ func registerGetNotifications(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 		text += renderPlaybooks(agents)
 		return mcp.NewToolResultText(text), nil
 	})
+}
+
+// formatNotification renders one buffered message as a list line for
+// get_notifications and get_priority_inbox: the sender masked, the space
+// title cleaned to one safe line, and the body sandboxed.
+func formatNotification(msg buffer.NotificationMessage) string {
+	return fmt.Sprintf("- [%s] **%s** in **%s** (%s, agent: %s): %s\n",
+		msg.Priority, maskEmail(msg.PersonEmail), safetext.Label(msg.RoomTitle), msg.Created.Format("15:04:05"), msg.RoutedAgent, safetext.Sandbox(msg.Text))
 }

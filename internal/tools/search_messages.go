@@ -62,7 +62,7 @@ func registerSearchMessages(s *mcpserver.MCPServer, client *webex.Client) {
 					continue // skip spaces that fail
 				}
 				for _, m := range matches {
-					results = append(results, fmt.Sprintf("[%s] %s", sp.Title, m))
+					results = append(results, fmt.Sprintf("[%s] %s", safetext.Label(sp.Title), m))
 				}
 			}
 		}

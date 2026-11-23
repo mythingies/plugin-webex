@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -49,8 +50,10 @@ func registerGetMeetingTranscript(s *mcpserver.MCPServer, client *webex.Client) 
 		}
 
 		header := fmt.Sprintf("**Transcript: %s** (started: %s, format: %s)\n\n",
-			transcript.MeetingTopic, transcript.StartTime, format)
+			safetext.Label(transcript.MeetingTopic), transcript.StartTime, format)
 
-		return mcp.NewToolResultText(header + content), nil
+		// The transcript is what meeting participants said: Webex-sourced
+		// text, so it is sandboxed like a message body.
+		return mcp.NewToolResultText(header + safetext.Sandbox(content)), nil
 	})
 }
