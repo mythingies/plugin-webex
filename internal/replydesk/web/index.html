@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<meta name="csrf-token" content="{{.CSRF}}">
 <title>Reply Desk</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
@@ -81,9 +80,10 @@
         <div class="regen">
           <label for="regen-input">Regenerate with an instruction</label>
           <div class="regen-row">
-            <input id="regen-input" type="text" maxlength="500" autocomplete="off" placeholder="e.g. shorter, more formal, say I will check tomorrow">
+            <input id="regen-input" type="text" autocomplete="off" aria-describedby="regen-bytes" placeholder="e.g. shorter, more formal, say I will check tomorrow">
             <button type="button" id="btn-regen">Regenerate</button>
           </div>
+          <span id="regen-bytes" class="bytes" hidden></span>
         </div>
 
         <div class="actions">
@@ -120,6 +120,7 @@
   <pre id="confirm-text" class="msg-text final" tabindex="-1"></pre>
   <p id="confirm-bytes" class="hint"></p>
   <div id="confirm-error" class="notice error" role="alert" hidden></div>
+  <div id="confirm-state" class="notice info" aria-live="polite" hidden></div>
   <div id="confirm-compare" class="compare" hidden>
     <div>
       <h3>You wrote</h3>

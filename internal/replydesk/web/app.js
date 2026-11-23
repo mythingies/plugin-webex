@@ -25,8 +25,21 @@
   const CLOSED = 'Reply Desk is closed - you can close this tab.';
   const DRAFT_ANYWAY = 'Draft a reply anyway.';
   const SEND_UNKNOWN = 'Unknown whether it was sent - check Webex before retrying';
+  const SEND_LOST = 'We lost the connection while sending - check the state below before retrying';
+  const OPEN_FROM_LINK = 'Open Reply Desk from the link printed by webex-mcp --review';
+  const SIGNED_OUT = 'You signed out in another window - close this page and run webex-mcp --review again';
+  const BUSY = 'A draft is already being written - try again when it finishes';
+  const DRAFTER_OFF = 'Drafting is unavailable - you can still write the reply yourself';
+  // The server's limit on a regenerate instruction, in UTF-8 bytes.
+  const MAX_INSTRUCTION_BYTES = 1000;
+  // sessionStorage is per origin, and the origin includes the port, so one
+  // key cannot collide with another review server's token.
+  const CSRF_KEY = 'replydesk-csrf';
 
   const DONE_STATES = ['sent', 'dismissed'];
+  // States the server refuses to (re)draft: the reply is out, on its way, or
+  // possibly out.
+  const NO_REGEN_STATES = ['sent', 'dismissed', 'sending', 'send_unknown'];
 
   const STATE_LABELS = {
     pending: 'Pending',
@@ -105,6 +118,31 @@
 
   function isDone(state) {
     return DONE_STATES.indexOf(state) >= 0;
+  }
+
+  /** Whether Draft now / Regenerate is allowed in this state (matches the service). */
+  function canRegen(state) {
+    return NO_REGEN_STATES.indexOf(state) < 0;
+  }
+
+  /** The CSRF token from a "#csrf=..." fragment, or ''. */
+  function csrfFromHash(hash) {
+    const m = /^#csrf=([A-Za-z0-9_-]+)$/.exec(hash || '');
+    return m ? m[1] : '';
+  }
+
+  /** Fixed user-facing text for error codes any endpoint can return, or ''. */
+  function codeMessage(code) {
+    switch (code) {
+      case 'busy':
+        return BUSY;
+      case 'drafter_off':
+        return DRAFTER_OFF;
+      case 'signed_out':
+        return SIGNED_OUT;
+      default:
+        return '';
+    }
   }
 
   /** Inbox group key for an item. */
@@ -273,8 +311,14 @@
         r.actions = ['refresh'];
         break;
       case 'network':
-        r.message = 'Cannot reach Reply Desk. It may have shut down - check the terminal.';
-        r.retry = true;
+        // The request may have reached the server and the message may be
+        // out: never offer a blind retry. The caller shows the server state.
+        r.message = SEND_LOST;
+        break;
+      case 'busy':
+      case 'drafter_off':
+      case 'signed_out':
+        r.message = codeMessage(code);
         break;
       default:
         r.message = 'Send failed' + (httpStatus ? ' (HTTP ' + httpStatus + ')' : '') + '.';
@@ -305,6 +349,7 @@
   const pure = {
     byteLen, countFills, nextFillRange, groupOf, groupItems, flatOrder, relTime, fmtLookback,
     sendBlockReason, draftKey, reconcileEditor, describeError, toHex, isTypingTarget,
+    canRegen, csrfFromHash, codeMessage, MAX_INSTRUCTION_BYTES,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = pure;
   if (typeof document === 'undefined') return;
@@ -325,7 +370,7 @@
     autoDrafted: new Set(), // rooms drafted on open in this page
     checked: new Set(), // room_id + '\n' + ask, local checklist ticks
     detailSig: '',
-    confirm: null, // {roomId, title, inThread, text, sending, openedAt}
+    confirm: null, // {roomId, headId, title, text, sending, lost, openedAt}
     timer: 0,
     inflight: false,
     again: false,
@@ -334,7 +379,37 @@
   };
 
   const $ = (id) => document.getElementById(id);
-  const csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+  // Set by loadCSRF in init. The token arrives once, in the fragment of the
+  // /login redirect; the HTML never contains it.
+  let csrf = '';
+
+  /** Take the token from the fragment (and drop the fragment), else from sessionStorage. */
+  function loadCSRF() {
+    let tok = csrfFromHash(location.hash);
+    if (location.hash) {
+      try {
+        history.replaceState(null, '', location.pathname + location.search);
+      } catch (e) {
+        // Leaving the fragment in place is harmless; it is never sent.
+      }
+    }
+    try {
+      if (tok) sessionStorage.setItem(CSRF_KEY, tok);
+      else tok = sessionStorage.getItem(CSRF_KEY) || '';
+    } catch (e) {
+      // Storage blocked: the token still works for this page load.
+    }
+    return tok;
+  }
+
+  function forgetCSRF() {
+    csrf = '';
+    try {
+      sessionStorage.removeItem(CSRF_KEY);
+    } catch (e) {
+      // Nothing stored.
+    }
+  }
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -389,10 +464,15 @@
   /** fetch wrapper. Never throws; returns {ok, status, data, error}. */
   async function api(method, path, body) {
     if (S.locked) return { ok: false, status: 0, error: { code: 'locked', detail: '' } };
-    const opts = { method: method, credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } };
+    // Every /api/ call, GETs included, carries the CSRF header.
+    const opts = {
+      method: method,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Accept: 'application/json', 'X-ReplyDesk-CSRF': csrf },
+    };
     if (method !== 'GET') {
       opts.headers['Content-Type'] = 'application/json';
-      opts.headers['X-ReplyDesk-CSRF'] = csrf;
       opts.body = JSON.stringify(body || {});
     }
     let res;
@@ -413,6 +493,14 @@
     }
     if (!res.ok) {
       const err = data && typeof data.code === 'string' ? data : { code: '', detail: res.statusText || '' };
+      if (err.code === 'signed_out') {
+        lock(SIGNED_OUT);
+      } else if (res.status === 403 && method === 'GET' && err.code === 'forbidden') {
+        // A GET is refused only for a bad CSRF token: this page did not come
+        // from the launch link (or the token is from an earlier run).
+        forgetCSRF();
+        lock(OPEN_FROM_LINK);
+      }
       return { ok: false, status: res.status, error: err };
     }
     return { ok: true, status: res.status, data: data };
@@ -429,9 +517,10 @@
     return S.items.some((it) => it.state === 'drafting' || it.state === 'sending');
   }
 
+  /** Queue the next poll. A hidden tab does not poll; visibilitychange resumes it. */
   function schedule() {
     clearTimeout(S.timer);
-    if (S.locked) return;
+    if (S.locked || document.visibilityState === 'hidden') return;
     S.timer = setTimeout(refresh, isBusy() ? FAST_POLL_MS : SLOW_POLL_MS);
   }
 
@@ -520,6 +609,7 @@
     renderStatus();
     renderList();
     renderDetail();
+    updateConfirmState();
   }
 
   function renderStatus() {
@@ -643,14 +733,13 @@
   function renderAsk(item) {
     const d = item.draft;
     const nodes = [];
-    const done = isDone(item.state);
     if (!d) {
       let msg = 'No draft yet.';
       if (isDrafting(item)) msg = 'Drafting...';
       else if (item.state === 'draft_failed') msg = 'The draft failed. Regenerate, or write the reply yourself.';
       else if (drafterMode() === 'off') msg = 'Drafting unavailable - read the conversation below and write your reply.';
       nodes.push(el('p', 'muted', msg));
-      if (canDraft() && !isDrafting(item) && !done) {
+      if (canDraft() && !isDrafting(item) && canRegen(item.state)) {
         nodes.push(button('Draft now', () => doDraft(item.room_id, '')));
       }
       $('d-ask-body').replaceChildren(...nodes);
@@ -661,7 +750,7 @@
       const box = el('div', 'notice info');
       box.append(el('strong', null, 'Probably no reply needed. '));
       box.append(document.createTextNode(d.needs_reply_reason || ''));
-      if (canDraft() && !isDrafting(item) && !done) {
+      if (canDraft() && !isDrafting(item) && canRegen(item.state)) {
         box.append(button('Draft anyway', () => doDraft(item.room_id, DRAFT_ANYWAY)));
       }
       nodes.push(box);
@@ -802,13 +891,23 @@
     $('d-newdraft').hidden = !(ed && ed.offerKey);
     $('d-drafting').hidden = !drafting;
 
+    // The server limit is in bytes; maxlength would count UTF-16 units.
+    const instrBytes = byteLen($('regen-input').value.trim());
+    const instrOver = instrBytes > MAX_INSTRUCTION_BYTES;
+    const rb = $('regen-bytes');
+    rb.hidden = instrBytes === 0;
+    rb.textContent = instrBytes + ' / ' + MAX_INSTRUCTION_BYTES + ' bytes' +
+      (instrOver ? ' - over the limit by ' + (instrBytes - MAX_INSTRUCTION_BYTES) : '');
+    rb.classList.toggle('over', instrOver);
+    $('regen-input').classList.toggle('over', instrOver);
+
     if (S.locked) return;
     const why = sendBlockReason(text, max, item.state);
     $('btn-send').disabled = !!why;
     $('d-send-why').textContent = why;
-    const regenOff = !canDraft() || drafting || done;
-    $('btn-regen').disabled = regenOff;
-    $('regen-input').disabled = !canDraft() || done;
+    const regenAllowed = canDraft() && canRegen(item.state);
+    $('btn-regen').disabled = !regenAllowed || drafting || instrOver;
+    $('regen-input').disabled = !regenAllowed;
     $('btn-dismiss').disabled = done;
     $('btn-snooze').disabled = done;
   }
@@ -824,10 +923,12 @@
   }
 
   function toastError(prefix, res) {
-    if (res.status === 401 || (res.error && res.error.code === 'locked')) return;
+    if (S.locked || res.status === 401 || (res.error && res.error.code === 'locked')) return;
     const e = res.error || {};
     let msg = prefix;
+    const fixed = codeMessage(e.code);
     if (e.code === 'network') msg += ': cannot reach Reply Desk';
+    else if (fixed) msg = fixed;
     else if (e.detail) msg += ': ' + e.detail;
     else if (res.status) msg += ' (HTTP ' + res.status + ')';
     toast(msg, 'error');
@@ -875,7 +976,11 @@
   async function doDraft(roomId, instruction, quiet) {
     if (!canDraft()) return;
     const item = findItem(roomId);
-    if (!item) return;
+    if (!item || !canRegen(item.state)) return;
+    if (byteLen(instruction) > MAX_INSTRUCTION_BYTES) {
+      toast('The instruction is over ' + MAX_INSTRUCTION_BYTES + ' bytes - shorten it', 'error');
+      return;
+    }
     const res = await api('POST', '/api/draft', { room_id: roomId, instruction: instruction || '' });
     if (!res.ok) {
       if (!quiet) toastError('Could not start drafting', res);
@@ -1052,11 +1157,17 @@
       return;
     }
     closeMenus(false);
-    S.confirm = { roomId: item.room_id, title: item.title || '', text: text, sending: false, openedAt: Date.now() };
+    // head_id ties the send to the burst on screen now; if the other person
+    // wrote again since, the server refuses with new_messages.
+    S.confirm = {
+      roomId: item.room_id, headId: item.head_id || '', title: item.title || '', text: text,
+      sending: false, lost: false, openedAt: Date.now(),
+    };
     $('confirm-to').textContent = item.title || '(untitled)';
     $('confirm-thread').textContent = item.in_thread ? '(in the thread)' : '';
     showConfirmText(text);
     $('confirm-error').hidden = true;
+    $('confirm-state').hidden = true;
     $('confirm-compare').hidden = true;
     $('confirm-extra').replaceChildren();
     setConfirmSending(false, true);
@@ -1093,10 +1204,19 @@
       return;
     }
     const res = await api('POST', '/api/send', {
-      room_id: c.roomId, text: text, text_sha256: hash, ack_sanitized: !!ackSanitized,
+      room_id: c.roomId, head_id: c.headId, text: text, text_sha256: hash, ack_sanitized: !!ackSanitized,
     });
     c.sending = false;
     if (S.confirm !== c) return;
+    if (res.status === 0 && res.error && res.error.code === 'network') {
+      // The connection dropped mid-send: the message may or may not be out.
+      // No retry button; show what the server recorded instead.
+      c.lost = true;
+      showConfirmError(res.error, 0);
+      updateConfirmState();
+      refresh();
+      return;
+    }
     if (res.ok) {
       $('dlg-confirm').close();
       S.editors.delete(c.roomId);
@@ -1149,6 +1269,44 @@
     // Retrying the same text only makes sense for transient errors.
     setConfirmSending(false, info.retry && !override);
     $('confirm-send').hidden = info.actions.indexOf('send_sanitized') >= 0;
+  }
+
+  /**
+   * After a send lost its connection, show what the server now says about
+   * the room, so the user can tell "sent" from "not sent" before retrying.
+   * Runs on every render, so the line follows each poll.
+   */
+  function updateConfirmState() {
+    const box = $('confirm-state');
+    const c = S.confirm;
+    if (!c || !c.lost) {
+      box.hidden = true;
+      return;
+    }
+    const item = findItem(c.roomId);
+    let msg;
+    if (S.offline) {
+      msg = 'Reply Desk is not answering, so its state is unknown. Check the conversation in Webex before sending again.';
+    } else if (!item) {
+      msg = 'This conversation has left the inbox, so the reply was most likely sent. Check Webex, or tick "Show sent & dismissed".';
+    } else {
+      const label = STATE_LABELS[item.state] || item.state;
+      switch (item.state) {
+        case 'sent':
+          msg = 'State now: ' + label + '. The reply went out - do not send it again.';
+          break;
+        case 'sending':
+          msg = 'State now: ' + label + '. Reply Desk is still sending - wait for the result.';
+          break;
+        case 'send_unknown':
+          msg = 'State now: ' + label + '. ' + SEND_UNKNOWN + '.';
+          break;
+        default:
+          msg = 'State now: ' + label + '. Reply Desk has no record of this reply going out. Check Webex, then cancel and send again if it is missing.';
+      }
+    }
+    box.textContent = msg;
+    box.hidden = false;
   }
 
   // ---------------------------------------------------------------------
@@ -1211,6 +1369,14 @@
   // ---------------------------------------------------------------------
 
   function init() {
+    csrf = loadCSRF();
+    if (!csrf) {
+      // Opened by URL or bookmark instead of the launch link: without the
+      // token every /api/ call would be refused.
+      lock(OPEN_FROM_LINK);
+      return;
+    }
+
     $('btn-rescan').addEventListener('click', doRescan);
     $('btn-close').addEventListener('click', doClose);
     $('btn-help').addEventListener('click', () => $('dlg-help').showModal());
@@ -1233,6 +1399,7 @@
     $('btn-keep').addEventListener('click', () => replaceDraft(false));
 
     $('btn-regen').addEventListener('click', doRegenerate);
+    $('regen-input').addEventListener('input', updateEditorUI);
     $('regen-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !$('btn-regen').disabled) {
         e.preventDefault();
@@ -1274,8 +1441,11 @@
     });
 
     document.addEventListener('keydown', onKey);
+    // A hidden tab stops polling (schedule checks visibility); showing it
+    // again refreshes at once.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refresh();
+      else clearTimeout(S.timer);
     });
 
     refresh();

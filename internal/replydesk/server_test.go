@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -41,6 +40,7 @@ type fakeBackend struct {
 	sendID     string
 	sendStatus int
 	sendErr    *APIError
+	sendDelay  time.Duration // how long Send takes, e.g. re-check GETs waiting on Retry-After
 	dismissErr *APIError
 	snoozeErr  *APIError
 }
@@ -79,6 +79,10 @@ func (f *fakeBackend) Draft(ctx context.Context, roomID, instruction string) *AP
 }
 
 func (f *fakeBackend) Send(ctx context.Context, req SendRequest) (string, int, *APIError) {
+	f.mu.Lock()
+	delay := f.sendDelay
+	f.mu.Unlock()
+	time.Sleep(delay)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sends = append(f.sends, req)
@@ -140,9 +144,8 @@ type harness struct {
 }
 
 type harnessOpts struct {
-	opts   ServeOptions
-	deps   serveDeps
-	before func(*reviewServer) // runs before run(), e.g. to swap the template
+	opts ServeOptions
+	deps serveDeps
 }
 
 func startHarness(t *testing.T, b *fakeBackend, ho harnessOpts) *harness {
@@ -165,9 +168,6 @@ func startHarness(t *testing.T, b *fakeBackend, ho harnessOpts) *harness {
 	s, err := newReviewServer(ln, b, ho.opts, ho.deps)
 	if err != nil {
 		t.Fatalf("newReviewServer: %v", err)
-	}
-	if ho.before != nil {
-		ho.before(s)
 	}
 	h.s = s
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,7 +203,10 @@ func startHarness(t *testing.T, b *fakeBackend, ho harnessOpts) *harness {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-h.done:
+		case err := <-h.done:
+			if err != nil {
+				t.Errorf("run = %v, want nil", err)
+			}
 		case <-time.After(10 * time.Second):
 			t.Error("server did not stop")
 		}
@@ -281,14 +284,20 @@ func (h *harness) login() {
 	if resp.StatusCode != http.StatusSeeOther {
 		h.t.Fatalf("login status = %d, want 303", resp.StatusCode)
 	}
-	for _, c := range resp.Cookies() {
-		if c.Name == sessionCookieName {
-			h.cookie = c
-		}
-	}
+	h.cookie = sessionCookie(resp, h.s.cookieName)
 	if h.cookie == nil {
 		h.t.Fatal("login set no session cookie")
 	}
+}
+
+// sessionCookie returns the response's cookie with this name, or nil.
+func sessionCookie(resp *http.Response, name string) *http.Cookie {
+	for _, c := range resp.Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 func (h *harness) csrf() string {
@@ -297,14 +306,22 @@ func (h *harness) csrf() string {
 	return h.s.csrf
 }
 
-func (h *harness) get(path string) (*http.Response, []byte) {
+// get sends the session cookie and the CSRF header, as app.js does; mods can
+// remove either.
+func (h *harness) get(path string, mods ...func(*http.Request)) (*http.Response, []byte) {
 	h.t.Helper()
 	req := h.newReq(http.MethodGet, path, nil)
 	if h.cookie != nil {
 		req.AddCookie(h.cookie)
 	}
+	req.Header.Set(csrfHeaderName, h.csrf())
+	for _, m := range mods {
+		m(req)
+	}
 	return h.do(req)
 }
+
+func noCSRF(r *http.Request) { r.Header.Del(csrfHeaderName) }
 
 // post sends a request that passes every check; mods can break one.
 func (h *harness) post(path, body string, mods ...func(*http.Request)) (*http.Response, []byte) {
@@ -412,8 +429,15 @@ func TestEmbeddedAssets(t *testing.T) {
 			t.Errorf("%s not embedded: %v", name, err)
 		}
 	}
-	if _, err := template.ParseFS(webFS, "web/index.html"); err != nil {
-		t.Fatalf("index.html is not a valid template: %v", err)
+	// index.html is served as-is: no template actions, no CSRF slot.
+	raw, err := fs.ReadFile(webFS, "web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"{{", "csrf-token"} {
+		if bytes.Contains(raw, []byte(bad)) {
+			t.Errorf("index.html contains %q", bad)
+		}
 	}
 }
 
@@ -450,17 +474,12 @@ func TestLaunchURLAndLoginFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("login = %d, want 303", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != "/" {
-		t.Fatalf("Location = %q", loc)
+	if loc := resp.Header.Get("Location"); loc != "/#csrf="+h.csrf() {
+		t.Fatalf("Location = %q, want the CSRF token in the fragment", loc)
 	}
-	var c *http.Cookie
-	for _, ck := range resp.Cookies() {
-		if ck.Name == sessionCookieName {
-			c = ck
-		}
-	}
+	c := sessionCookie(resp, h.s.cookieName)
 	if c == nil {
-		t.Fatal("no rd_s cookie")
+		t.Fatalf("no %s cookie", h.s.cookieName)
 	}
 	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
 		t.Fatalf("cookie attributes: HttpOnly=%v SameSite=%v Path=%q", c.HttpOnly, c.SameSite, c.Path)
@@ -481,6 +500,9 @@ func TestLaunchURLAndLoginFlow(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte(h.secret)) {
 		t.Fatal("index page contains the launch secret")
+	}
+	if bytes.Contains(body, []byte(h.csrf())) {
+		t.Fatal("index page contains the CSRF token")
 	}
 
 	resp, body = h.get("/api/status")
@@ -549,9 +571,12 @@ func TestLoginRejects(t *testing.T) {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.want)
 			}
 			for _, c := range resp.Cookies() {
-				if c.Name == sessionCookieName {
+				if strings.HasPrefix(c.Name, sessionCookiePrefix) {
 					t.Fatal("rejected login set a session cookie")
 				}
+			}
+			if loc := resp.Header.Get("Location"); loc != "" {
+				t.Fatalf("rejected login redirected to %q", loc)
 			}
 			if tt.reason != "" {
 				out := logs.String()
@@ -669,11 +694,7 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 	check("bad login", r, 403)
 	r, _ = h.do(h.newReq(http.MethodGet, strings.TrimPrefix(h.launch, h.base), nil))
 	check("login", r, 303)
-	for _, c := range r.Cookies() {
-		if c.Name == sessionCookieName {
-			h.cookie = c
-		}
-	}
+	h.cookie = sessionCookie(r, h.s.cookieName)
 	r, _ = h.get("/")
 	check("index", r, 200)
 	r, _ = h.get("/static/app.js")
@@ -682,6 +703,8 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 	check("css", r, 200)
 	r, _ = h.get("/api/status")
 	check("status", r, 200)
+	r, _ = h.get("/api/status", noCSRF)
+	check("status without CSRF", r, 403)
 	r, _ = h.get("/nope")
 	check("404", r, 404)
 	r, _ = h.do(h.newReq(http.MethodDelete, "/api/scan", nil))
@@ -697,10 +720,10 @@ func TestUnauthenticated(t *testing.T) {
 	h := startHarness(t, b, harnessOpts{})
 	before := b.mutatingCalls()
 
-	forged := &http.Cookie{Name: sessionCookieName, Value: base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
+	forged := &http.Cookie{Name: h.s.cookieName, Value: base64.RawURLEncoding.EncodeToString(make([]byte, 32))} // #nosec G124 -- test forges a client-side cookie
 	// The real cookie value, presented before login activates the session.
 	h.s.mu.Lock()
-	early := &http.Cookie{Name: sessionCookieName, Value: h.s.session}
+	early := &http.Cookie{Name: h.s.cookieName, Value: h.s.session} // #nosec G124 -- test forges a client-side cookie
 	h.s.mu.Unlock()
 
 	cookies := map[string]*http.Cookie{"none": nil, "forged": forged, "pre-login": early}
@@ -864,6 +887,7 @@ func TestMethods(t *testing.T) {
 			} else {
 				req := h.newReq(tt.method, tt.path, nil)
 				req.AddCookie(h.cookie)
+				req.Header.Set(csrfHeaderName, h.csrf())
 				resp, _ = h.do(req)
 			}
 			if resp.StatusCode != tt.want {
@@ -1004,7 +1028,10 @@ func TestDraftRoute(t *testing.T) {
 		{name: "missing room", body: `{"instruction":"x"}`, want: 400, wantCode: codeBadRequest},
 		{name: "not pending", body: `{"room_id":"r1"}`, backend: &APIError{Code: CodeNotPending, Detail: "gone"}, want: 404, wantCode: CodeNotPending, wantCall: true},
 		{name: "rate limited", body: `{"room_id":"r1"}`, backend: &APIError{Code: CodeRateLimited}, want: 429, wantCode: CodeRateLimited, wantCall: true},
-		{name: "other error", body: `{"room_id":"r1"}`, backend: &APIError{Code: "drafter_off", Detail: "no claude"}, want: 400, wantCode: "drafter_off", wantCall: true},
+		{name: "drafter off", body: `{"room_id":"r1"}`, backend: &APIError{Code: CodeDrafterOff, Detail: "no claude"}, want: 400, wantCode: CodeDrafterOff, wantCall: true},
+		{name: "busy", body: `{"room_id":"r1","instruction":"shorter"}`, backend: &APIError{Code: CodeBusy, Detail: "drafting"}, want: 409, wantCode: CodeBusy, wantCall: true, wantInstr: "shorter"},
+		{name: "signed out", body: `{"room_id":"r1"}`, backend: &APIError{Code: CodeSignedOut, Detail: "logged out"}, want: 409, wantCode: CodeSignedOut, wantCall: true},
+		{name: "other error", body: `{"room_id":"r1"}`, backend: &APIError{Code: "store", Detail: "disk"}, want: 400, wantCode: "store", wantCall: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1042,8 +1069,11 @@ func TestDraftRoute(t *testing.T) {
 }
 
 func TestSendRoute(t *testing.T) {
-	req := SendRequest{RoomID: "r1", Text: "hello", TextSHA256: strings.Repeat("ab", 32), AckSanitized: true}
+	req := SendRequest{RoomID: "r1", HeadID: "head-1", Text: "hello", TextSHA256: strings.Repeat("ab", 32), AckSanitized: true}
 	reqJSON, _ := json.Marshal(req)
+	if !strings.Contains(string(reqJSON), `"head_id":"head-1"`) {
+		t.Fatalf("request JSON %s lacks head_id", reqJSON)
+	}
 	tests := []struct {
 		name     string
 		body     string
@@ -1065,6 +1095,9 @@ func TestSendRoute(t *testing.T) {
 		{name: "send unknown", body: string(reqJSON), status: 502, apiErr: &APIError{Code: CodeSendUnknown}, want: 502, wantCall: true},
 		{name: "bad status becomes 500", body: string(reqJSON), status: 200, apiErr: &APIError{Code: "weird"}, want: 500, wantCall: true},
 		{name: "zero status becomes 500", body: string(reqJSON), status: 0, apiErr: &APIError{Code: "weird"}, want: 500, wantCall: true},
+		{name: "signed out is 409", body: string(reqJSON), status: 400, apiErr: &APIError{Code: CodeSignedOut, Detail: "logged out"}, want: 409, wantCall: true},
+		{name: "busy is 409", body: string(reqJSON), status: 500, apiErr: &APIError{Code: CodeBusy}, want: 409, wantCall: true},
+		{name: "drafter off is 400", body: string(reqJSON), status: 0, apiErr: &APIError{Code: CodeDrafterOff}, want: 400, wantCall: true},
 		{name: "missing room", body: `{"text":"hi"}`, want: 400},
 		{name: "browser cannot pick a target", body: `{"room_id":"r1","text":"hi","parent_id":"p"}`, want: 400},
 	}
@@ -1119,6 +1152,7 @@ func TestDismissRoute(t *testing.T) {
 		{name: "missing room", body: `{"reason":"other"}`, want: 400, wantCode: codeBadRequest},
 		{name: "not pending", body: `{"room_id":"r1","reason":"other"}`, backend: &APIError{Code: CodeNotPending}, want: 404, wantCode: CodeNotPending, wantCall: [2]string{"r1", DismissOther}},
 		{name: "backend error", body: `{"room_id":"r1","reason":"other"}`, backend: &APIError{Code: "store"}, want: 400, wantCode: "store", wantCall: [2]string{"r1", DismissOther}},
+		{name: "signed out", body: `{"room_id":"r1","reason":"other"}`, backend: &APIError{Code: CodeSignedOut}, want: 409, wantCode: CodeSignedOut, wantCall: [2]string{"r1", DismissOther}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1170,6 +1204,7 @@ func TestSnoozeRoute(t *testing.T) {
 		{name: "fractional", body: `{"room_id":"r1","hours":1.5}`, want: 400, wantCode: codeBadRequest},
 		{name: "missing room", body: `{"hours":2}`, want: 400, wantCode: codeBadRequest},
 		{name: "not pending", body: `{"room_id":"r1","hours":2}`, backend: &APIError{Code: CodeNotPending}, want: 404, wantCode: CodeNotPending, wantCall: &snoozeCall{"r1", 2}},
+		{name: "signed out", body: `{"room_id":"r1","hours":2}`, backend: &APIError{Code: CodeSignedOut}, want: 409, wantCode: CodeSignedOut, wantCall: &snoozeCall{"r1", 2}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1200,40 +1235,150 @@ func TestSnoozeRoute(t *testing.T) {
 	}
 }
 
-func TestIndexTemplateGetsCSRF(t *testing.T) {
-	h := startHarness(t, &fakeBackend{}, harnessOpts{before: func(s *reviewServer) {
-		s.tmpl = template.Must(template.New("index").Parse(`<meta name="csrf-token" content="{{.CSRF}}">`))
-	}})
-	h.login()
-	_, body := h.get("/")
-	m := regexp.MustCompile(`content="([^"]+)"`).FindSubmatch(body)
-	if m == nil {
-		t.Fatalf("no csrf meta in %q", body)
+// TestCSRFOnlyInLoginFragment: anyone holding the cookie gets GET /, so the
+// page must not carry the token; it arrives once, in the /login redirect.
+func TestCSRFOnlyInLoginFragment(t *testing.T) {
+	h := startHarness(t, &fakeBackend{}, harnessOpts{})
+	resp, _ := h.do(h.newReq(http.MethodGet, strings.TrimPrefix(h.launch, h.base), nil))
+	loc := resp.Header.Get("Location")
+	token, ok := strings.CutPrefix(loc, "/#csrf=")
+	if !ok || token == "" {
+		t.Fatalf("Location = %q, want /#csrf=<token>", loc)
 	}
-	token := string(m[1])
+	decodesTo32Bytes(t, "fragment token", token)
 	if token != h.csrf() {
-		t.Fatal("rendered CSRF differs from the session token")
+		t.Fatal("fragment token differs from the session token")
 	}
-	// The rendered token is the one POSTs need.
-	resp, _ := h.post("/api/scan", `{}`, func(r *http.Request) { r.Header.Set(csrfHeaderName, token) })
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST with rendered token = %d", resp.StatusCode)
+	h.cookie = sessionCookie(resp, h.s.cookieName)
+
+	// GET / needs only the cookie, and does not hand out the token.
+	resp, body := h.get("/", noCSRF)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / = %d", resp.StatusCode)
+	}
+	if bytes.Contains(body, []byte(token)) {
+		t.Fatal("index page contains the CSRF token")
+	}
+	for _, path := range []string{"/static/app.js", "/static/app.css"} {
+		if resp, _ := h.get(path, noCSRF); resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s without CSRF = %d", path, resp.StatusCode)
+		}
+	}
+	// The fragment token is the one the API needs.
+	setTok := func(r *http.Request) { r.Header.Set(csrfHeaderName, token) }
+	if resp, _ := h.get("/api/status", setTok); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/status with fragment token = %d", resp.StatusCode)
+	}
+	if resp, _ := h.post("/api/scan", `{}`, setTok); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST with fragment token = %d", resp.StatusCode)
 	}
 }
 
-func TestEmbeddedIndexRendersCSRF(t *testing.T) {
-	raw, err := fs.ReadFile(webFS, "web/index.html")
+// TestAPIGetsRequireCSRF: the cookie reaches this server from a page on any
+// 127.0.0.1 port, so reads need the CSRF header too.
+func TestAPIGetsRequireCSRF(t *testing.T) {
+	b := &fakeBackend{items: []ItemView{{RoomID: "r1", Title: "Ana"}}}
+	h := startHarness(t, b, harnessOpts{})
+	h.login()
+	mods := map[string]func(*http.Request){
+		"missing": noCSRF,
+		"wrong": func(r *http.Request) {
+			r.Header.Set(csrfHeaderName, base64.RawURLEncoding.EncodeToString(make([]byte, 32)))
+		},
+		"prefix": func(r *http.Request) { r.Header.Set(csrfHeaderName, h.csrf()[:len(h.csrf())-1]) },
+		"cookie": func(r *http.Request) { r.Header.Set(csrfHeaderName, h.cookie.Value) },
+	}
+	for name, mod := range mods {
+		for _, path := range []string{"/api/status", "/api/items", "/api/items?all=1", "/api/nope"} {
+			t.Run(name+path, func(t *testing.T) {
+				resp, body := h.get(path, mod)
+				if resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("status %d, want 403 (%s)", resp.StatusCode, body)
+				}
+				if e := decodeAPIError(t, body); e.Code != codeForbidden {
+					t.Fatalf("code %q", e.Code)
+				}
+				if bytes.Contains(body, []byte("Ana")) {
+					t.Fatal("refused response leaked inbox data")
+				}
+			})
+		}
+	}
+	b.mu.Lock()
+	n := len(b.itemsCalls)
+	b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("Items called %d times without the CSRF header", n)
+	}
+	if resp, _ := h.get("/api/items"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/items with CSRF = %d", resp.StatusCode)
+	}
+}
+
+// TestCookieNamedPerPort: cookies ignore ports, so the name carries it.
+func TestCookieNamedPerPort(t *testing.T) {
+	h := startHarness(t, &fakeBackend{}, harnessOpts{})
+	_, port, err := net.SplitHostPort(h.host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := startHarness(t, &fakeBackend{}, harnessOpts{})
-	h.login()
-	resp, body := h.get("/")
-	if resp.StatusCode != 200 {
-		t.Fatalf("GET / = %d", resp.StatusCode)
+	if want := "rd_s_" + port; h.s.cookieName != want {
+		t.Fatalf("cookie name %q, want %q", h.s.cookieName, want)
 	}
-	if bytes.Contains(raw, []byte("{{.CSRF}}")) && !bytes.Contains(body, []byte(h.csrf())) {
-		t.Fatal("index.html uses {{.CSRF}} but the token was not rendered")
+	h.login()
+	if h.cookie.Name != "rd_s_"+port {
+		t.Fatalf("login set cookie %q", h.cookie.Name)
+	}
+	// The right value under another server's name does not authenticate.
+	value := h.cookie.Value
+	other := strconv.Itoa(mustAtoi(t, port) + 1)
+	for _, name := range []string{"rd_s", "rd_s_" + other} {
+		h.cookie = &http.Cookie{Name: name, Value: value} // #nosec G124 -- test forges a client-side cookie
+		if resp, _ := h.get("/api/status"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("cookie %q = %d, want 401", name, resp.StatusCode)
+		}
+	}
+}
+
+// TestSlowSendSurvivesWriteTimeout: a send that outlasts the server's
+// WriteTimeout (re-check GETs waiting on Retry-After) must still deliver its
+// result, not a dropped connection after the message went out.
+func TestSlowSendSurvivesWriteTimeout(t *testing.T) {
+	b := &fakeBackend{sendID: "m-slow", sendStatus: 200, sendDelay: 600 * time.Millisecond}
+	h := startHarness(t, b, harnessOpts{deps: serveDeps{writeTimeout: 150 * time.Millisecond}})
+	h.login()
+	req := h.newReq(http.MethodPost, "/api/send", strings.NewReader(`{"room_id":"r1","head_id":"h1","text":"hi","text_sha256":"00"}`))
+	req.AddCookie(h.cookie)
+	req.Header.Set("Origin", h.base)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeaderName, h.csrf())
+	resp, err := h.client.Do(req)
+	if err != nil {
+		t.Fatalf("slow send lost its response: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("slow send body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != `{"message_id":"m-slow"}` {
+		t.Fatalf("slow send = %d %s", resp.StatusCode, body)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.sends) != 1 || b.sends[0].HeadID != "h1" {
+		t.Fatalf("Send calls %+v", b.sends)
+	}
+}
+
+func TestServeTimeoutDefaults(t *testing.T) {
+	h := startHarness(t, &fakeBackend{}, harnessOpts{deps: serveDeps{writeTimeout: 150 * time.Millisecond}})
+	if h.s.writeTimeout != 150*time.Millisecond || h.s.sendWriteTimeout != defaultSendWriteTimeout {
+		t.Fatalf("timeouts = %s / %s", h.s.writeTimeout, h.s.sendWriteTimeout)
+	}
+	d := startHarness(t, &fakeBackend{}, harnessOpts{})
+	if d.s.writeTimeout != defaultWriteTimeout || d.s.sendWriteTimeout < 2*time.Minute {
+		t.Fatalf("default timeouts = %s / %s", d.s.writeTimeout, d.s.sendWriteTimeout)
 	}
 }
 
@@ -1248,9 +1393,14 @@ func TestActivityDefersIdleTimeout(t *testing.T) {
 	h := startHarness(t, &fakeBackend{}, harnessOpts{opts: ServeOptions{IdleTimeout: 500 * time.Millisecond, MaxLifetime: time.Hour}})
 	h.login()
 	deadline := time.Now().Add(1500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if resp, _ := h.get("/api/status"); resp.StatusCode != 200 {
-			t.Fatalf("status %d", resp.StatusCode)
+	for i := 0; time.Now().Before(deadline); i++ {
+		// User actions: opening the page and POSTs.
+		if i%2 == 0 {
+			if resp, _ := h.get("/"); resp.StatusCode != 200 {
+				t.Fatalf("GET / %d", resp.StatusCode)
+			}
+		} else if resp, _ := h.post("/api/scan", `{}`); resp.StatusCode != 202 {
+			t.Fatalf("POST /api/scan %d", resp.StatusCode)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -1263,6 +1413,31 @@ func TestActivityDefersIdleTimeout(t *testing.T) {
 	for time.Now().Before(stop) && h.running() {
 		_, _ = h.client.Get(h.base + "/api/status")
 		time.Sleep(50 * time.Millisecond)
+	}
+	if err := h.wait(5 * time.Second); err != nil {
+		t.Fatalf("run = %v", err)
+	}
+}
+
+// TestPollsDoNotDeferIdleTimeout: an open tab polls status and items in the
+// background; that alone must not keep the server alive.
+func TestPollsDoNotDeferIdleTimeout(t *testing.T) {
+	h := startHarness(t, &fakeBackend{}, harnessOpts{opts: ServeOptions{IdleTimeout: 400 * time.Millisecond, MaxLifetime: time.Hour}})
+	h.login()
+	start := time.Now()
+	for h.running() && time.Since(start) < 3*time.Second {
+		for _, path := range []string{"/api/status", "/api/items", "/static/app.js"} {
+			req := h.newReq(http.MethodGet, path, nil)
+			req.AddCookie(h.cookie)
+			req.Header.Set(csrfHeaderName, h.csrf())
+			if resp, err := h.client.Do(req); err == nil {
+				_ = resp.Body.Close()
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if h.running() {
+		t.Fatal("background polls kept the server alive past the idle timeout")
 	}
 	if err := h.wait(5 * time.Second); err != nil {
 		t.Fatalf("run = %v", err)

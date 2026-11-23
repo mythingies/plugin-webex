@@ -293,6 +293,8 @@ kbd {
 .regen label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
 .regen-row { display: flex; gap: 6px; }
 .regen-row input { flex: 1 1 auto; min-width: 0; }
+.regen-row input.over { border-color: var(--err-text); }
+.regen .bytes { display: block; margin-top: 3px; font-size: 12px; }
 
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
 

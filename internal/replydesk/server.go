@@ -1,7 +1,6 @@
 package replydesk
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -10,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -24,8 +22,9 @@ import (
 	"time"
 )
 
-// webFS holds the review UI assets. index.html is an html/template that
-// receives {{.CSRF}}; app.js and app.css are served as-is.
+// webFS holds the review UI assets, served as-is. index.html carries no
+// secrets: the CSRF token reaches the page only in the /login redirect's URL
+// fragment (see handleLogin).
 //
 //go:embed web
 var webFS embed.FS
@@ -45,14 +44,32 @@ const (
 	// exchanged for the session cookie.
 	defaultLaunchTTL = 2 * time.Minute
 
-	sessionCookieName = "rd_s"
+	// The session cookie is named sessionCookiePrefix + "_" + PORT. Cookies
+	// ignore ports, so every server on 127.0.0.1 receives every rd_s_*
+	// cookie; the suffix keeps one review server from accepting, or
+	// overwriting, another's session.
+	sessionCookiePrefix = "rd_s"
+	// sessionCookieName is the bare prefix, kept only so older callers still
+	// compile. No cookie has this name any more: match reviewServer.cookieName.
+	sessionCookieName = sessionCookiePrefix
 	csrfHeaderName    = "X-ReplyDesk-CSRF"
+	// csrfFragment is the URL fragment key /login redirects with. A fragment
+	// is never sent to a server or in a Referer, and app.js removes it.
+	csrfFragment      = "csrf"
 	tokenBytes        = 32
 	maxRequestBody    = 64 << 10
 	maxInstructionLen = 1000
 	minSnoozeHours    = 1
 	maxSnoozeHours    = 168
 	shutdownGrace     = 5 * time.Second
+
+	// defaultWriteTimeout bounds writing an ordinary response.
+	defaultWriteTimeout = 30 * time.Second
+	// defaultSendWriteTimeout replaces it for /api/send, whose pre-send
+	// re-checks can wait out Retry-After twice before the POST to Webex. If
+	// the shorter deadline passed first, the message would be posted but the
+	// browser would be told the server was unreachable.
+	defaultSendWriteTimeout = 3 * time.Minute
 )
 
 // Error codes the server itself returns (the Backend returns the Code*
@@ -118,8 +135,10 @@ func Serve(ctx context.Context, b Backend, opts ServeOptions) error {
 
 // serveDeps are the seams tests replace.
 type serveDeps struct {
-	open      func(url string) error // default openBrowser
-	launchTTL time.Duration          // default defaultLaunchTTL
+	open             func(url string) error // default openBrowser
+	launchTTL        time.Duration          // default defaultLaunchTTL
+	writeTimeout     time.Duration          // default defaultWriteTimeout
+	sendWriteTimeout time.Duration          // default defaultSendWriteTimeout
 }
 
 // reviewServer is one review UI process: one launch secret, one session.
@@ -130,9 +149,13 @@ type reviewServer struct {
 	origin string // "http://127.0.0.1:PORT", the only accepted Origin
 	opts   ServeOptions
 	open   func(string) error
-	tmpl   *template.Template
+	index  []byte
 	js     []byte
 	css    []byte
+
+	cookieName       string // sessionCookiePrefix + "_" + PORT
+	writeTimeout     time.Duration
+	sendWriteTimeout time.Duration
 
 	idle     time.Duration
 	lifetime time.Duration
@@ -188,10 +211,16 @@ func newReviewServer(ln net.Listener, b Backend, opts ServeOptions, deps serveDe
 	if deps.launchTTL <= 0 {
 		deps.launchTTL = defaultLaunchTTL
 	}
+	if deps.writeTimeout <= 0 {
+		deps.writeTimeout = defaultWriteTimeout
+	}
+	if deps.sendWriteTimeout <= 0 {
+		deps.sendWriteTimeout = defaultSendWriteTimeout
+	}
 
-	tmpl, err := template.ParseFS(webFS, "web/index.html")
+	index, err := fs.ReadFile(webFS, "web/index.html")
 	if err != nil {
-		return nil, fmt.Errorf("replydesk: parse index.html: %w", err)
+		return nil, fmt.Errorf("replydesk: read index.html: %w", err)
 	}
 	js, err := fs.ReadFile(webFS, "web/app.js")
 	if err != nil {
@@ -218,24 +247,27 @@ func newReviewServer(ln net.Listener, b Backend, opts ServeOptions, deps serveDe
 	host := net.JoinHostPort("127.0.0.1", strconv.Itoa(tcp.Port))
 	now := time.Now()
 	return &reviewServer{
-		b:             b,
-		ln:            ln,
-		host:          host,
-		origin:        "http://" + host,
-		opts:          opts,
-		open:          deps.open,
-		tmpl:          tmpl,
-		js:            js,
-		css:           css,
-		idle:          opts.IdleTimeout,
-		lifetime:      opts.MaxLifetime,
-		started:       now,
-		closeCh:       make(chan struct{}),
-		secret:        secret,
-		secretExpires: now.Add(deps.launchTTL),
-		session:       session,
-		csrf:          csrf,
-		lastActive:    now,
+		b:                b,
+		ln:               ln,
+		host:             host,
+		origin:           "http://" + host,
+		opts:             opts,
+		open:             deps.open,
+		index:            index,
+		js:               js,
+		css:              css,
+		cookieName:       sessionCookiePrefix + "_" + strconv.Itoa(tcp.Port),
+		writeTimeout:     deps.writeTimeout,
+		sendWriteTimeout: deps.sendWriteTimeout,
+		idle:             opts.IdleTimeout,
+		lifetime:         opts.MaxLifetime,
+		started:          now,
+		closeCh:          make(chan struct{}),
+		secret:           secret,
+		secretExpires:    now.Add(deps.launchTTL),
+		session:          session,
+		csrf:             csrf,
+		lastActive:       now,
 	}, nil
 }
 
@@ -271,7 +303,7 @@ func (s *reviewServer) run(ctx context.Context) error {
 		Handler:           s,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      s.writeTimeout,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		ErrorLog:          slog.NewLogLogger(slog.NewTextHandler(os.Stderr, nil), slog.LevelWarn),
@@ -370,10 +402,20 @@ func (s *reviewServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeHTML(w, http.StatusUnauthorized, []byte(expiredPage))
 		return
 	}
-	s.touch()
 
+	// Every API call, reads included, needs the CSRF header: the cookie
+	// alone reaches this server from any page on any 127.0.0.1 port.
+	if isAPI && !s.checkCSRF(w, r) {
+		return
+	}
 	if r.Method == http.MethodPost && !s.checkPost(w, r) {
 		return
+	}
+	// Only what the user does counts as activity: opening the page and
+	// actions. The page's background polls must not keep the server alive
+	// while a forgotten tab sits open.
+	if r.Method == http.MethodPost || r.URL.Path == "/" {
+		s.touch()
 	}
 	s.route(w, r, isAPI)
 }
@@ -453,24 +495,26 @@ func (s *reviewServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.secretUsed = true
 	s.sessionActive = true
 	s.lastActive = time.Now()
-	session := s.session
+	session, csrf := s.session, s.csrf
 	s.mu.Unlock()
 
 	// Secure is not set: the UI is plain http on loopback, and some browsers
 	// drop Secure cookies on http://127.0.0.1.
 	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- loopback-only http origin; HttpOnly and SameSite=Strict are set
-		Name:     sessionCookieName,
+		Name:     s.cookieName,
 		Value:    session,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	w.Header().Set("Location", "/")
+	// The CSRF token reaches the page once, in the fragment, and never in
+	// the HTML: GET / answers anyone who presents the cookie.
+	w.Header().Set("Location", "/#"+csrfFragment+"="+csrf)
 	w.WriteHeader(http.StatusSeeOther)
 }
 
 func (s *reviewServer) authenticated(r *http.Request) bool {
-	c, err := r.Cookie(sessionCookieName)
+	c, err := r.Cookie(s.cookieName)
 	if err != nil {
 		return false
 	}
@@ -478,6 +522,19 @@ func (s *reviewServer) authenticated(r *http.Request) bool {
 	active, session := s.sessionActive, s.session
 	s.mu.Unlock()
 	return active && subtle.ConstantTimeCompare([]byte(c.Value), []byte(session)) == 1
+}
+
+// checkCSRF requires the per-session CSRF header. It writes the error
+// response and returns false on failure.
+func (s *reviewServer) checkCSRF(w http.ResponseWriter, r *http.Request) bool {
+	s.mu.Lock()
+	csrf := s.csrf
+	s.mu.Unlock()
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(csrfHeaderName)), []byte(csrf)) != 1 {
+		writeJSON(w, http.StatusForbidden, &APIError{Code: codeForbidden, Detail: "bad or missing CSRF token"})
+		return false
+	}
+	return true
 }
 
 // checkPost enforces the cross-site defenses on state-changing requests and
@@ -497,11 +554,7 @@ func (s *reviewServer) checkPost(w http.ResponseWriter, r *http.Request) bool {
 		writeJSON(w, http.StatusUnsupportedMediaType, &APIError{Code: codeUnsupportedMedia, Detail: "Content-Type must be application/json"})
 		return false
 	}
-	s.mu.Lock()
-	csrf := s.csrf
-	s.mu.Unlock()
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get(csrfHeaderName)), []byte(csrf)) != 1 {
-		writeJSON(w, http.StatusForbidden, &APIError{Code: codeForbidden, Detail: "bad or missing CSRF token"})
+	if !s.checkCSRF(w, r) {
 		return false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
@@ -540,16 +593,7 @@ func writeDecodeErr(w http.ResponseWriter, err error, detail string) {
 // ---- handlers ----
 
 func (s *reviewServer) handleIndex(w http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	csrf := s.csrf
-	s.mu.Unlock()
-	var buf bytes.Buffer
-	if err := s.tmpl.Execute(&buf, struct{ CSRF string }{CSRF: csrf}); err != nil {
-		slog.Error("replydesk: render index.html", "err", err)
-		writePlain(w, http.StatusInternalServerError, "internal error\n")
-		return
-	}
-	writeHTML(w, http.StatusOK, buf.Bytes())
+	writeHTML(w, http.StatusOK, s.index)
 }
 
 func (s *reviewServer) handleStatus(w http.ResponseWriter, _ *http.Request) {
@@ -611,11 +655,19 @@ func (s *reviewServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, &APIError{Code: codeBadRequest, Detail: "room_id is required"})
 		return
 	}
+	// The server-wide WriteTimeout is too short for a send whose re-checks
+	// wait on Retry-After: the message would go out and the browser would
+	// see a dropped connection instead of the result.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.sendWriteTimeout)); err != nil {
+		slog.Warn("replydesk: could not extend the send write deadline", "err", err)
+	}
 	// A closed tab must not abort a send halfway: the POST to Webex has no
 	// idempotency key.
 	id, status, apiErr := s.b.Send(context.WithoutCancel(r.Context()), req)
 	if apiErr != nil {
-		if status < 400 || status > 599 {
+		if fixed, ok := fixedErrStatus[apiErr.Code]; ok {
+			status = fixed
+		} else if status < 400 || status > 599 {
 			status = http.StatusInternalServerError
 		}
 		writeJSON(w, status, apiErr)
@@ -681,9 +733,20 @@ func (s *reviewServer) handleClose(w http.ResponseWriter, r *http.Request) {
 	s.requestClose()
 }
 
+// fixedErrStatus is the status for Backend error codes that mean the same
+// thing on every endpoint, Send included.
+var fixedErrStatus = map[string]int{
+	CodeBusy:       http.StatusConflict,
+	CodeDrafterOff: http.StatusBadRequest,
+	CodeSignedOut:  http.StatusConflict,
+}
+
 // backendErrStatus maps a Backend error from Draft, Dismiss, or Snooze to an
 // HTTP status.
 func backendErrStatus(e *APIError) int {
+	if st, ok := fixedErrStatus[e.Code]; ok {
+		return st
+	}
 	switch e.Code {
 	case CodeNotPending:
 		return http.StatusNotFound
