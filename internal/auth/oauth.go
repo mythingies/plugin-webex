@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -58,10 +59,16 @@ type OAuthProvider struct {
 	config OAuthConfig
 	store  *TokenStore
 
+	// mu serialises token access within this process. Refreshes across
+	// processes are serialised by the refresh lock file (refreshlock.go).
 	mu     sync.Mutex
 	tokens *StoredTokens
 
 	httpClient *http.Client
+
+	// tokenURL is the OAuth token endpoint. Empty means tokenEndpoint;
+	// tests point it at an httptest server.
+	tokenURL string
 }
 
 // NewOAuthProvider creates a provider that handles the full OAuth lifecycle.
@@ -80,6 +87,7 @@ func NewOAuthProvider(config OAuthConfig) (*OAuthProvider, error) {
 		config:     config,
 		store:      store,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		tokenURL:   tokenEndpoint,
 	}
 
 	// Migrate pre-v0.8.0 tokens.json into the keychain if present.
@@ -118,12 +126,25 @@ func (p *OAuthProvider) Token() (string, error) {
 	}
 
 	// Access token still valid.
-	if time.Now().Before(p.tokens.AccessTokenExpiresAt.Add(-refreshBuffer)) {
+	if accessTokenFresh(p.tokens) {
+		return p.tokens.AccessToken, nil
+	}
+
+	// The token is stale. Other processes (other Claude Code sessions,
+	// webex-mcp --review) share the stored tokens, so take the cross-process
+	// lock and look at what is stored before refreshing ourselves.
+	release, _ := acquireRefreshLock(p.refreshLockDir())
+	defer release()
+
+	p.adoptStoredTokens()
+	if accessTokenFresh(p.tokens) {
+		// Another process refreshed while we waited or since we loaded.
+		slog.Debug("adopted OAuth token refreshed by another process")
 		return p.tokens.AccessToken, nil
 	}
 
 	// Try refresh.
-	if p.tokens.RefreshToken != "" && time.Now().Before(p.tokens.RefreshTokenExpiresAt) {
+	if refreshTokenUsable(p.tokens) {
 		if err := p.refresh(); err != nil {
 			return "", fmt.Errorf("token refresh failed: %w", err)
 		}
@@ -131,6 +152,55 @@ func (p *OAuthProvider) Token() (string, error) {
 	}
 
 	return "", fmt.Errorf("tokens expired; re-authentication required")
+}
+
+// adoptStoredTokens reloads the token store and replaces the in-memory
+// tokens when the stored ones are newer: either the stored access token is
+// still fresh, or the stored refresh token is usable (so a refresh uses the
+// newest refresh token, which matters if the endpoint rotated it). The
+// in-memory tokens are kept when the store is empty, unreadable, or holds a
+// session for a different OAuth client.
+//
+// Callers must hold p.mu and should hold the refresh lock.
+func (p *OAuthProvider) adoptStoredTokens() {
+	if p.store == nil {
+		return
+	}
+	stored, err := p.store.Load()
+	if err != nil || stored == nil {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("could not reload stored OAuth tokens; using in-memory tokens", "error", err)
+		}
+		return
+	}
+	if stored.ClientID != "" && p.config.ClientID != "" && stored.ClientID != p.config.ClientID {
+		slog.Debug("stored OAuth tokens belong to a different client; not adopting")
+		return
+	}
+	if accessTokenFresh(stored) || refreshTokenUsable(stored) {
+		p.tokens = stored
+	}
+}
+
+// refreshLockDir is the directory for the cross-process refresh lock: the
+// directory of the token store's fallback file, which NewTokenStore creates.
+// Empty when the store has no path (then the refresh runs unlocked).
+func (p *OAuthProvider) refreshLockDir() string {
+	if p.store == nil || p.store.path == "" {
+		return ""
+	}
+	return filepath.Dir(p.store.path)
+}
+
+// accessTokenFresh reports whether t's access token is valid for longer than
+// refreshBuffer.
+func accessTokenFresh(t *StoredTokens) bool {
+	return t != nil && t.AccessToken != "" && time.Now().Before(t.AccessTokenExpiresAt.Add(-refreshBuffer))
+}
+
+// refreshTokenUsable reports whether t has an unexpired refresh token.
+func refreshTokenUsable(t *StoredTokens) bool {
+	return t != nil && t.RefreshToken != "" && time.Now().Before(t.RefreshTokenExpiresAt)
 }
 
 // NeedsAuth returns true if the user must go through the browser OAuth flow.
@@ -344,7 +414,16 @@ func (p *OAuthProvider) refresh() error {
 }
 
 func (p *OAuthProvider) doTokenRequest(data url.Values) error {
-	resp, err := p.httpClient.PostForm(tokenEndpoint, data)
+	client := p.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	endpoint := p.tokenURL
+	if endpoint == "" {
+		endpoint = tokenEndpoint
+	}
+
+	resp, err := client.PostForm(endpoint, data)
 	if err != nil {
 		return fmt.Errorf("token request: %w", err)
 	}
