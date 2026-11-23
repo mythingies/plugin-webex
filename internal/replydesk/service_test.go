@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -48,6 +51,14 @@ type fakeAPI struct {
 	roomsHook func()
 	listHook  func(webex.ListMessagesOptions)
 	sendHook  func()
+	abortHook func() // run when a rate limit has cancelled a scan
+}
+
+// scanAborted implements abortObserver.
+func (f *fakeAPI) scanAborted() {
+	if f.abortHook != nil {
+		f.abortHook()
+	}
 }
 
 func newFakeAPI() *fakeAPI {
@@ -260,8 +271,19 @@ func newTestService(t *testing.T, api *fakeAPI, d Drafter, mods ...func(*Config)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	t.Cleanup(s.wait)
+	t.Cleanup(func() { closeService(t, s) })
 	return s, clock
+}
+
+// closeService closes s, failing the test if background work outlives a
+// generous deadline.
+func closeService(t *testing.T, s *Service) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.Close(ctx); err != nil {
+		t.Errorf("Close: %v", err)
+	}
 }
 
 func rescan(s *Service) {
@@ -312,8 +334,16 @@ func seq(prefix string, n int, start, step time.Duration, mineAt ...int) []webex
 	return out
 }
 
-func sendReq(room, text string) SendRequest {
-	return SendRequest{RoomID: room, Text: text, TextSHA256: sha256Hex(text)}
+// sendReq is the request the UI sends for room: the text, its hash, and the
+// burst head the last scan showed ("" for a room the scan did not list).
+func sendReq(s *Service, room, text string) SendRequest {
+	s.mu.Lock()
+	head := ""
+	if p, ok := s.pending[room]; ok {
+		head = p.HeadID
+	}
+	s.mu.Unlock()
+	return SendRequest{RoomID: room, HeadID: head, Text: text, TextSHA256: sha256Hex(text)}
 }
 
 func assertNoSend(t *testing.T, api *fakeAPI) {
@@ -455,25 +485,52 @@ func TestScanSkipsOldHeadAndBots(t *testing.T) {
 }
 
 func TestScanRateLimitAborts(t *testing.T) {
+	// Rooms are launched in list order, scanConcurrency at a time: a1, a2,
+	// a3 and rl first, then a4.. only as slots free up.
 	api := newFakeAPI()
+	addOther := func(i int) {
+		// My reply plus a full context: the room needs exactly one page.
+		h := []webex.Message{theirs(fmt.Sprintf("a%dm", i), time.Duration(i)*time.Minute)}
+		h = append(h, seq(fmt.Sprintf("a%dh", i), ContextMessages+1, time.Hour, time.Minute, 0)...)
+		api.addRoom(fmt.Sprintf("a%d", i), "Other", h...)
+	}
+	for i := 1; i <= 3; i++ {
+		addOther(i)
+	}
 	api.addRoom("rl", "Limited", theirs("x", time.Minute))
-	for i := 1; i <= 9; i++ {
-		api.addRoom(fmt.Sprintf("a%d", i), "Other", theirs(fmt.Sprintf("a%dm", i), time.Duration(i)*time.Minute))
+	for i := 4; i <= 9; i++ {
+		addOther(i)
 	}
 	api.listErr["rl"] = &webex.RateLimitError{Status: 429, RetryAfter: time.Minute}
+
+	// a1..a3 are mid-call when rl is rate limited, and hold their slots
+	// until the rate limit has cancelled the scan, so no slot frees up for
+	// a4 before then.
+	entered := make(chan struct{}, 3)
+	aborted := make(chan struct{})
+	api.abortHook = func() { close(aborted) }
 	api.listHook = func(o webex.ListMessagesOptions) {
-		if o.RoomID != "rl" {
-			time.Sleep(20 * time.Millisecond)
+		if o.RoomID == "rl" {
+			for range 3 {
+				<-entered
+			}
+			return
 		}
+		entered <- struct{}{}
+		<-aborted
 	}
 	got, err := Scan(context.Background(), api, meID, DefaultLookback, testNow)
 	var rl *webex.RateLimitError
 	if !errors.As(err, &rl) {
 		t.Fatalf("err = %v, want a RateLimitError", err)
 	}
-	calls := api.callsOf("ListMessages")
-	if len(calls) > scanConcurrency {
-		t.Fatalf("ListMessages calls after the rate limit: %d calls %v", len(calls), calls)
+	perRoom := map[string]int{}
+	for _, c := range api.callsOf("ListMessages") {
+		room, _, _ := strings.Cut(strings.TrimPrefix(c, "room="), " ")
+		perRoom[room]++
+	}
+	if want := map[string]int{"a1": 1, "a2": 1, "a3": 1, "rl": 1}; !maps.Equal(perRoom, want) {
+		t.Fatalf("ListMessages calls per room = %v, want %v", perRoom, want)
 	}
 	for _, id := range pendingIDs(got) {
 		if !slices.Contains([]string{"a1", "a2", "a3"}, id) {
@@ -557,7 +614,9 @@ func TestScanListRoomsError(t *testing.T) {
 // ---- effective state ----
 
 func TestEffectiveStateRules(t *testing.T) {
-	p := &Pending{RoomID: "r", HeadID: "h2"}
+	p := &Pending{RoomID: "r", HeadID: "h2", HeadCreated: testNow.Add(-time.Hour)}
+	later := p.HeadCreated.Add(time.Minute)    // the record's head was newer: it was deleted
+	earlier := p.HeadCreated.Add(-time.Minute) // the record's head was older
 	old := &Draft{HeadID: "h1", Text: "old"}
 	cur := &Draft{HeadID: "h2", Text: "cur"}
 	future := testNow.Add(time.Hour)
@@ -588,6 +647,13 @@ func TestEffectiveStateRules(t *testing.T) {
 		{name: "sending in flight", has: true, r: Record{HeadID: "h2", State: StateSending}, sending: true, want: StateSending},
 		{name: "dismissed while drafting", has: true, r: Record{HeadID: "h2", State: StateDismissed}, drafting: true, want: StateDismissed},
 		{name: "sent", has: true, r: Record{HeadID: "h2", State: StateSent}, want: StateSent},
+		{name: "deleted head keeps dismissed", has: true, r: Record{HeadID: "h1", HeadCreated: later, State: StateDismissed}, want: StateDismissed},
+		{name: "deleted head keeps sent", has: true, r: Record{HeadID: "h1", HeadCreated: later, State: StateSent}, want: StateSent},
+		{name: "deleted head keeps snoozed", has: true, r: Record{HeadID: "h1", HeadCreated: later, State: StateSnoozed, SnoozeUntil: future}, want: StateSnoozed},
+		{name: "deleted head, snooze expired", has: true, r: Record{HeadID: "h1", HeadCreated: later, State: StateSnoozed, SnoozeUntil: past}, want: StatePending},
+		{name: "same created time keeps dismissed", has: true, r: Record{HeadID: "h1", HeadCreated: p.HeadCreated, State: StateDismissed}, want: StateDismissed},
+		{name: "newer head reopens dismissed", has: true, r: Record{HeadID: "h1", HeadCreated: earlier, State: StateDismissed}, want: StatePending},
+		{name: "deleted head does not keep drafted", has: true, r: Record{HeadID: "h1", HeadCreated: later, State: StateDrafted, Draft: old}, want: StatePending, wantStale: true, wantDft: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -618,7 +684,7 @@ func TestNewHeadReopensRoom(t *testing.T) {
 					t.Fatal(e)
 				}
 			case "send":
-				if _, _, e := s.Send(context.Background(), sendReq("r", "ok")); e != nil {
+				if _, _, e := s.Send(context.Background(), sendReq(s, "r", "ok")); e != nil {
 					t.Fatal(e)
 				}
 			}
@@ -703,6 +769,9 @@ func TestRestartLeftoverStates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	api := newFakeAPI()
 	api.addRoom("drafting", "D", theirs("d1", time.Hour))
@@ -726,31 +795,115 @@ func TestRestartLeftoverStates(t *testing.T) {
 		t.Fatalf("record for an older head = %s, want pending", o.State)
 	}
 	// ...but it can still be sent by hand.
-	if _, status, e := s.Send(context.Background(), sendReq("sending", "hello")); e != nil {
+	if _, status, e := s.Send(context.Background(), sendReq(s, "sending", "hello")); e != nil {
 		t.Fatalf("send from send_unknown = %d %v", status, e)
 	}
 }
 
 func TestNewServicePrunesOldRecords(t *testing.T) {
-	path := storePath(t)
-	st, err := OpenStore(path, meID)
-	if err != nil {
-		t.Fatal(err)
+	put := func(t *testing.T, path, room string, age time.Duration) {
+		t.Helper()
+		st, err := OpenStore(path, meID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.now = func() time.Time { return testNow.Add(-age) }
+		if err := st.Put(Record{RoomID: room, HeadID: "h", State: StateDismissed}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	st.now = func() time.Time { return testNow.Add(-31 * 24 * time.Hour) }
-	_ = st.Put(Record{RoomID: "old", HeadID: "h", State: StateDismissed})
-	st.now = func() time.Time { return testNow.Add(-29 * 24 * time.Hour) }
-	_ = st.Put(Record{RoomID: "recent", HeadID: "h", State: StateDismissed})
+	const day = 24 * time.Hour
+	tests := []struct {
+		name     string
+		lookback time.Duration
+		kept     map[string]time.Duration
+		pruned   map[string]time.Duration
+	}{
+		{"default lookback keeps 30 days", 0,
+			map[string]time.Duration{"recent": 29 * day},
+			map[string]time.Duration{"old": 31 * day}},
+		{"short lookback still keeps 30 days", 3 * day,
+			map[string]time.Duration{"recent": 29 * day},
+			map[string]time.Duration{"old": 31 * day}},
+		// A record must outlive every burst a scan can still list, or a
+		// dismissed room comes back once its record is pruned.
+		{"long lookback keeps a week past it", 60 * day,
+			map[string]time.Duration{"inside": 59 * day, "grace": 66 * day},
+			map[string]time.Duration{"old": 68 * day}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := storePath(t)
+			for room, age := range tc.kept {
+				put(t, path, room, age)
+			}
+			for room, age := range tc.pruned {
+				put(t, path, room, age)
+			}
+			s, _ := newTestService(t, newFakeAPI(), nil, func(c *Config) {
+				c.StorePath = path
+				c.Lookback = tc.lookback
+			})
+			for room, age := range tc.kept {
+				if _, ok := s.store.Get(room); !ok {
+					t.Errorf("record %s (%s old) was pruned", room, age)
+				}
+			}
+			for room, age := range tc.pruned {
+				if _, ok := s.store.Get(room); ok {
+					t.Errorf("record %s (%s old) survived", room, age)
+				}
+			}
+			if s.Status().DrafterMode != ModeOff {
+				t.Fatal("nil drafter is not off")
+			}
+		})
+	}
+}
 
-	s, _ := newTestService(t, newFakeAPI(), nil, func(c *Config) { c.StorePath = path })
-	if _, ok := s.store.Get("old"); ok {
-		t.Fatal("31-day-old record survived")
-	}
-	if _, ok := s.store.Get("recent"); !ok {
-		t.Fatal("29-day-old record was pruned")
-	}
-	if s.Status().DrafterMode != ModeOff {
-		t.Fatal("nil drafter is not off")
+// Deleting the newest message makes an older one the head; that must not
+// re-open a room the user already closed. A genuinely newer message must.
+func TestDeletedHeadKeepsClosedState(t *testing.T) {
+	for _, action := range []string{"dismiss", "snooze"} {
+		t.Run(action, func(t *testing.T) {
+			api := newFakeAPI()
+			api.addRoom("r", "Alice", theirs("t2", time.Minute), theirs("t1", 2*time.Minute), mine("m0", time.Hour))
+			s, clock := newTestService(t, api, newFakeDrafter())
+			rescan(s)
+			want := StateDismissed
+			if action == "dismiss" {
+				if e := s.Dismiss("r", DismissOther); e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				want = StateSnoozed
+				if e := s.Snooze("r", 24); e != nil {
+					t.Fatal(e)
+				}
+			}
+			r, _ := s.store.Get("r")
+			if wantCreated, _ := parseTime(theirs("t2", time.Minute).Created); !r.HeadCreated.Equal(wantCreated) {
+				t.Fatalf("record head_created = %v, want %v", r.HeadCreated, wantCreated)
+			}
+
+			// t2 is deleted: t1 is the head now.
+			api.setHistory("r", theirs("t1", 2*time.Minute), mine("m0", time.Hour))
+			rescan(s)
+			if it := itemFor(t, s, "r"); it.HeadID != "t1" || it.State != want {
+				t.Fatalf("after deleting the newest message: head %s state %s, want t1 %s", it.HeadID, it.State, want)
+			}
+
+			// A new message re-opens it.
+			clock.set(testNow.Add(time.Minute))
+			api.prepend("r", theirs("t3", -30*time.Second))
+			rescan(s)
+			if it := itemFor(t, s, "r"); it.HeadID != "t3" || it.State != StatePending {
+				t.Fatalf("after a new message: head %s state %s, want t3 pending", it.HeadID, it.State)
+			}
+		})
 	}
 }
 
@@ -881,6 +1034,57 @@ func TestDraftRefsAndCitations(t *testing.T) {
 	}
 }
 
+func TestCitationsDedupByMessage(t *testing.T) {
+	refs := map[string]webex.Message{
+		"c1": mine("m1", time.Hour),
+		"p1": mine("m1", time.Hour), // the same message under two refs
+		"p2": mine("m2", 2*time.Hour),
+		"b1": theirs("", time.Minute),
+		"b2": theirs("", 2*time.Minute),
+	}
+	got := citations([]string{"c1", "p1", "p2", "c1", "b1", "b2"}, refs)
+	var ids []string
+	for _, c := range got {
+		ids = append(ids, c.MessageID)
+	}
+	// Messages without an ID can't be matched up, so each ref counts.
+	if want := []string{"m1", "m2", "", ""}; !slices.Equal(ids, want) {
+		t.Fatalf("cited ids = %q, want %q", ids, want)
+	}
+}
+
+// The user's messages in the context are already shown to the drafter as c
+// refs; they must not come back as p refs.
+func TestDraftPriorExcludesContext(t *testing.T) {
+	h := seq("m", 40, time.Minute, time.Hour, 1, 3, 20)
+	h[0].Text = "where is the staging deploy key?"
+	h[1].Text = "the staging deploy key is in vault"      // mine, in the context
+	h[20].Text = "staging deploy key rotation is monthly" // mine, older history
+	api := newFakeAPI()
+	api.addRoom("r", "Alice", h...)
+	d := newFakeDrafter()
+	s, _ := newTestService(t, api, d)
+	rescan(s)
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatal(e)
+	}
+	s.wait()
+	in := d.calls()[0]
+	if !slices.ContainsFunc(in.Context, func(m RefMsg) bool { return m.Text == h[1].Text }) {
+		t.Fatalf("context = %+v, want it to hold my reply", in.Context)
+	}
+	for _, p := range in.Prior {
+		for _, c := range in.Context {
+			if p.Text == c.Text {
+				t.Fatalf("prior %s repeats context %s: %q", p.Ref, c.Ref, p.Text)
+			}
+		}
+	}
+	if len(in.Prior) == 0 || in.Prior[0].Text != h[20].Text {
+		t.Fatalf("prior = %+v, want the older history message", in.Prior)
+	}
+}
+
 func TestDraftFailures(t *testing.T) {
 	longErr := strings.Repeat("x", 400)
 	tests := []struct {
@@ -987,14 +1191,40 @@ func TestDraftKeepsOldDraftWhileRegenerating(t *testing.T) {
 	if it.State != StateDrafting || it.Draft == nil || it.Draft.Text != "Reply to Alice" {
 		t.Fatalf("while regenerating: %+v", it)
 	}
-	// A second request while drafting is a no-op.
-	if e := s.Draft(context.Background(), "r", "x"); e != nil {
-		t.Fatal(e)
+	// A regenerate instruction while drafting is refused, not dropped.
+	if e := s.Draft(context.Background(), "r", "x"); e == nil || e.Code != CodeBusy {
+		t.Fatalf("Draft with an instruction while drafting = %v, want %s", e, CodeBusy)
+	}
+	if e := s.Draft(context.Background(), "r", "again"); e == nil || e.Code != CodeBusy {
+		t.Fatalf("repeated instruction while drafting = %v, want %s", e, CodeBusy)
+	}
+	if e := s.Draft(context.Background(), "r", ""); e == nil || e.Code != CodeBusy {
+		t.Fatalf("plain draft while an instructed one runs = %v, want %s", e, CodeBusy)
 	}
 	close(d.gate)
 	s.wait()
 	if n := len(d.calls()); n != 2 {
 		t.Fatalf("drafter calls = %d, want 2", n)
+	}
+	if it := itemFor(t, s, "r"); it.Draft == nil || it.Draft.Instruction != "again" {
+		t.Fatalf("draft = %+v", it.Draft)
+	}
+
+	// A repeated plain request while a plain draft runs is a no-op.
+	d.mu.Lock()
+	d.gate = make(chan struct{})
+	d.mu.Unlock()
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatal(e)
+	}
+	waitFor(t, func() bool { return d.runningNow() == 1 })
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatalf("repeated plain draft = %v, want a no-op", e)
+	}
+	close(d.gate)
+	s.wait()
+	if n := len(d.calls()); n != 3 {
+		t.Fatalf("drafter calls = %d, want 3", n)
 	}
 }
 
@@ -1076,6 +1306,74 @@ func TestDraftHeadChangedWhileDrafting(t *testing.T) {
 	}
 }
 
+// Drafting a snoozed room ("Draft now" or Regenerate) keeps the snooze; the
+// draft shows up inside the snoozed item when it is done.
+func TestDraftWhileSnoozedKeepsSnooze(t *testing.T) {
+	api := newFakeAPI()
+	api.addRoom("r", "Alice", theirs("t1", time.Minute))
+	d := newFakeDrafter()
+	n := 0
+	d.fn = func(DraftInput) (*DraftOutput, error) {
+		n++
+		if n == 3 {
+			return nil, errors.New("drafter broke")
+		}
+		return &DraftOutput{NeedsReply: true, Draft: fmt.Sprintf("v%d", n)}, nil
+	}
+	s, _ := newTestService(t, api, d)
+	rescan(s)
+	if e := s.Snooze("r", 4); e != nil {
+		t.Fatal(e)
+	}
+	until := testNow.Add(4 * time.Hour).Format(time.RFC3339)
+	check := func(step, wantText, wantErr string) {
+		t.Helper()
+		it := itemFor(t, s, "r")
+		if it.State != StateSnoozed || it.SnoozeUntil != until || it.Error != wantErr {
+			t.Fatalf("%s: state %s until %q error %q, want snoozed until %s error %q", step, it.State, it.SnoozeUntil, it.Error, until, wantErr)
+		}
+		if (wantText == "") != (it.Draft == nil) || (it.Draft != nil && it.Draft.Text != wantText) {
+			t.Fatalf("%s: draft = %+v, want %q", step, it.Draft, wantText)
+		}
+	}
+
+	d.mu.Lock()
+	d.gate = make(chan struct{})
+	d.mu.Unlock()
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatal(e)
+	}
+	waitFor(t, func() bool { return d.runningNow() == 1 })
+	check("while drafting", "", "")
+	if st := s.Status(); st.Drafting != 1 {
+		t.Fatalf("drafting = %d", st.Drafting)
+	}
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatalf("repeated plain draft of a snoozed room = %v", e)
+	}
+	close(d.gate)
+	s.wait()
+	check("drafted", "v1", "")
+	if n != 1 {
+		t.Fatalf("drafter calls = %d, want 1", n)
+	}
+
+	d.mu.Lock()
+	d.gate = nil
+	d.mu.Unlock()
+	if e := s.Draft(context.Background(), "r", "warmer"); e != nil {
+		t.Fatal(e)
+	}
+	s.wait()
+	check("regenerated", "v2", "")
+
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatal(e)
+	}
+	s.wait()
+	check("failed regenerate", "v2", "drafter broke")
+}
+
 func TestDismissWhileDraftingKeepsDismissal(t *testing.T) {
 	api := newFakeAPI()
 	api.addRoom("r", "Alice", theirs("t1", time.Minute))
@@ -1114,18 +1412,27 @@ func sendFixture(t *testing.T) (*Service, *fakeAPI, *fixedClock) {
 
 func TestSendCheckOrder(t *testing.T) {
 	long := strings.Repeat("a", safetext.MaxMessageLen+1)
+	req := func(room, head, text, hash string) SendRequest {
+		return SendRequest{RoomID: room, HeadID: head, Text: text, TextSHA256: hash}
+	}
+	// The fixture's room r has burst head t2.
 	tests := []struct {
 		name   string
 		req    SendRequest
 		status int
 		code   string
 	}{
-		{"unknown room", sendReq("nope", "hi"), http.StatusConflict, CodeNotPending},
-		{"empty beats hash", SendRequest{RoomID: "r", Text: "  ", TextSHA256: "00"}, http.StatusBadRequest, CodeEmpty},
-		{"hash beats fill", SendRequest{RoomID: "r", Text: "[[FILL: x]]", TextSHA256: "00"}, http.StatusBadRequest, CodeHashMismatch},
-		{"fill beats too long", sendReq("r", "[[FILL: x]]"+long), http.StatusBadRequest, CodeFillRemaining},
-		{"too long beats sanitize", sendReq("r", "javascript:x "+long), http.StatusBadRequest, CodeTooLong},
-		{"sanitized", sendReq("r", "click javascript:alert(1)"), http.StatusConflict, CodeSanitized},
+		{"unknown room", req("nope", "t2", "hi", sha256Hex("hi")), http.StatusConflict, CodeNotPending},
+		{"unknown room beats missing head", req("nope", "", "hi", sha256Hex("hi")), http.StatusConflict, CodeNotPending},
+		{"missing head", req("r", "", "hi", sha256Hex("hi")), http.StatusBadRequest, codeBadRequest},
+		{"missing head beats empty", req("r", "", "  ", "00"), http.StatusBadRequest, codeBadRequest},
+		{"older head", req("r", "t1", "hi", sha256Hex("hi")), http.StatusConflict, CodeNewMessages},
+		{"other head beats empty", req("r", "zz", "  ", "00"), http.StatusConflict, CodeNewMessages},
+		{"empty beats hash", req("r", "t2", "  ", "00"), http.StatusBadRequest, CodeEmpty},
+		{"hash beats fill", req("r", "t2", "[[FILL: x]]", "00"), http.StatusBadRequest, CodeHashMismatch},
+		{"fill beats too long", req("r", "t2", "[[FILL: x]]"+long, sha256Hex("[[FILL: x]]"+long)), http.StatusBadRequest, CodeFillRemaining},
+		{"too long beats sanitize", req("r", "t2", "javascript:x "+long, sha256Hex("javascript:x "+long)), http.StatusBadRequest, CodeTooLong},
+		{"sanitized", req("r", "t2", "click javascript:alert(1)", sha256Hex("click javascript:alert(1)")), http.StatusConflict, CodeSanitized},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1145,16 +1452,44 @@ func TestSendCheckOrder(t *testing.T) {
 	}
 }
 
+// The reply answers the burst the user was shown: a request naming an older
+// head is refused even though Webex shows nothing newer than the scan did.
+func TestSendRequiresShownHead(t *testing.T) {
+	s, api, _ := sendFixture(t)
+	it := itemFor(t, s, "r")
+	if it.HeadID != "t2" {
+		t.Fatalf("item head_id = %q, want t2", it.HeadID)
+	}
+	b, err := json.Marshal(it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"head_id":"t2"`) {
+		t.Fatalf("item JSON lacks head_id: %s", b)
+	}
+	// The page was loaded when t1 was the newest message; t2 arrived with a
+	// rescan, and the old page still names t1.
+	req := sendReq(s, "r", "ok")
+	req.HeadID = "t1"
+	if _, status, e := s.Send(context.Background(), req); e == nil || e.Code != CodeNewMessages || status != http.StatusConflict {
+		t.Fatalf("Send with an older head = %d %v", status, e)
+	}
+	assertNoSend(t, api)
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r", "ok")); e != nil {
+		t.Fatalf("Send with the shown head = %v", e)
+	}
+}
+
 func TestSendRefusesDoneStates(t *testing.T) {
 	s, api, _ := sendFixture(t)
 	_ = s.Dismiss("r2", DismissOther)
-	if _, status, e := s.Send(context.Background(), sendReq("r2", "hi")); e == nil || e.Code != CodeNotPending || status != http.StatusConflict {
+	if _, status, e := s.Send(context.Background(), sendReq(s, "r2", "hi")); e == nil || e.Code != CodeNotPending || status != http.StatusConflict {
 		t.Fatalf("send dismissed = %d %v", status, e)
 	}
-	if _, _, e := s.Send(context.Background(), sendReq("r", "hi")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r", "hi")); e != nil {
 		t.Fatal(e)
 	}
-	if _, status, e := s.Send(context.Background(), sendReq("r", "hi again")); e == nil || e.Code != CodeNotPending || status != http.StatusConflict {
+	if _, status, e := s.Send(context.Background(), sendReq(s, "r", "hi again")); e == nil || e.Code != CodeNotPending || status != http.StatusConflict {
 		t.Fatalf("second send = %d %v", status, e)
 	}
 	if n := api.sendCount(); n != 1 {
@@ -1162,7 +1497,9 @@ func TestSendRefusesDoneStates(t *testing.T) {
 	}
 }
 
-func TestSendRefusesWhileDrafting(t *testing.T) {
+// A send is allowed while a (pre-)draft is queued or running; the draft
+// finishing afterwards is discarded rather than overwriting the sent record.
+func TestSendWhileDrafting(t *testing.T) {
 	api := newFakeAPI()
 	api.addRoom("r", "Alice", theirs("t1", time.Minute))
 	d := newFakeDrafter()
@@ -1171,21 +1508,58 @@ func TestSendRefusesWhileDrafting(t *testing.T) {
 	rescan(s)
 	_ = s.Draft(context.Background(), "r", "")
 	waitFor(t, func() bool { return d.runningNow() == 1 })
-	if _, status, e := s.Send(context.Background(), sendReq("r", "hi")); e == nil || e.Code != CodeNotPending || status != http.StatusConflict {
+	if st := itemFor(t, s, "r").State; st != StateDrafting {
+		t.Fatalf("state = %s, want drafting", st)
+	}
+	if _, status, e := s.Send(context.Background(), sendReq(s, "r", "my own words")); e != nil || status != http.StatusOK {
 		t.Fatalf("send while drafting = %d %v", status, e)
 	}
 	close(d.gate)
+	s.wait()
+	r, _ := s.store.Get("r")
+	if r.State != StateSent || r.Draft == nil || r.Draft.Text != "my own words" || r.SentMessageID != "sent-msg-1" {
+		t.Fatalf("record after the draft finished = %+v", r)
+	}
+	if it := itemFor(t, s, "r"); it.State != StateSent {
+		t.Fatalf("state = %s, want sent", it.State)
+	}
+	if n := s.Status().Drafting; n != 0 {
+		t.Fatalf("drafting = %d", n)
+	}
+}
+
+// A send in progress wins over a draft finishing at the same time.
+func TestDraftFinishingDuringSendIsDiscarded(t *testing.T) {
+	api := newFakeAPI()
+	api.addRoom("r", "Alice", theirs("t1", time.Minute))
+	d := newFakeDrafter()
+	d.gate = make(chan struct{})
+	s, _ := newTestService(t, api, d)
+	rescan(s)
+	_ = s.Draft(context.Background(), "r", "")
+	waitFor(t, func() bool { return d.runningNow() == 1 })
+	api.sendHook = func() {
+		close(d.gate)
+		waitFor(t, func() bool { return s.Status().Drafting == 0 })
+	}
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r", "mine")); e != nil {
+		t.Fatal(e)
+	}
+	s.wait()
+	if r, _ := s.store.Get("r"); r.State != StateSent || r.Draft.Text != "mine" {
+		t.Fatalf("record = %+v", r)
+	}
 }
 
 func TestSendSanitizedAckFlow(t *testing.T) {
 	s, api, _ := sendFixture(t)
 	text := "see javascript:alert(1) <@all>"
-	_, _, e := s.Send(context.Background(), sendReq("r", text))
+	_, _, e := s.Send(context.Background(), sendReq(s, "r", text))
 	if e == nil || e.Code != CodeSanitized {
 		t.Fatalf("first send = %v", e)
 	}
 	// The UI resends the sanitized text, hashed, with the ack.
-	req := sendReq("r", e.SanitizedText)
+	req := sendReq(s, "r", e.SanitizedText)
 	req.AckSanitized = true
 	id, status, e2 := s.Send(context.Background(), req)
 	if e2 != nil || status != http.StatusOK || id == "" {
@@ -1227,7 +1601,7 @@ func TestSendRecheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, api, _ := sendFixture(t)
 			tc.setup(api)
-			_, status, e := s.Send(context.Background(), sendReq("r", "hi"))
+			_, status, e := s.Send(context.Background(), sendReq(s, "r", "hi"))
 			if e == nil || e.Code != tc.code || status != tc.status {
 				t.Fatalf("Send = %d %+v, want %d %s", status, e, tc.status, tc.code)
 			}
@@ -1236,7 +1610,7 @@ func TestSendRecheck(t *testing.T) {
 				t.Fatalf("state after refused send = %s", st)
 			}
 			// The refused send did not use up the rate limit.
-			if _, status, e := s.Send(context.Background(), sendReq("r2", "hi")); e != nil {
+			if _, status, e := s.Send(context.Background(), sendReq(s, "r2", "hi")); e != nil {
 				t.Fatalf("next send = %d %v", status, e)
 			}
 		})
@@ -1245,7 +1619,7 @@ func TestSendRecheck(t *testing.T) {
 
 func TestSendRecheckOrderOfCalls(t *testing.T) {
 	s, api, _ := sendFixture(t)
-	if _, _, e := s.Send(context.Background(), sendReq("r", "hi")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r", "hi")); e != nil {
 		t.Fatal(e)
 	}
 	api.mu.Lock()
@@ -1264,15 +1638,15 @@ func TestSendRateLimit(t *testing.T) {
 	}
 	s, clock := newTestService(t, api, newFakeDrafter())
 	rescan(s)
-	if _, _, e := s.Send(context.Background(), sendReq("r0", "a")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r0", "a")); e != nil {
 		t.Fatal(e)
 	}
 	clock.set(testNow.Add(time.Second))
-	if _, status, e := s.Send(context.Background(), sendReq("r1", "b")); e == nil || e.Code != CodeRateLimited || status != http.StatusTooManyRequests {
+	if _, status, e := s.Send(context.Background(), sendReq(s, "r1", "b")); e == nil || e.Code != CodeRateLimited || status != http.StatusTooManyRequests {
 		t.Fatalf("send within 2s = %d %v", status, e)
 	}
 	clock.set(testNow.Add(2 * time.Second))
-	if _, _, e := s.Send(context.Background(), sendReq("r1", "b")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r1", "b")); e != nil {
 		t.Fatalf("send after 2s = %v", e)
 	}
 
@@ -1285,11 +1659,11 @@ func TestSendRateLimit(t *testing.T) {
 	}
 	s.mu.Unlock()
 	clock.set(base.Add(time.Minute))
-	if _, _, e := s.Send(context.Background(), sendReq("r2", "c")); e == nil || e.Code != CodeRateLimited {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r2", "c")); e == nil || e.Code != CodeRateLimited {
 		t.Fatalf("31st send in an hour = %v", e)
 	}
 	clock.set(base.Add(time.Hour))
-	if _, _, e := s.Send(context.Background(), sendReq("r2", "c")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r2", "c")); e != nil {
 		t.Fatalf("send once the oldest left the window = %v", e)
 	}
 	if n := api.sendCount(); n != 3 {
@@ -1301,7 +1675,7 @@ func TestSendSuccess(t *testing.T) {
 	logs := captureSlog(t)
 	s, api, _ := sendFixture(t)
 	text := "Thanks Alice, here is the plan"
-	id, status, e := s.Send(context.Background(), sendReq("r", text))
+	id, status, e := s.Send(context.Background(), sendReq(s, "r", text))
 	if e != nil || status != http.StatusOK || id != "sent-msg-1" {
 		t.Fatalf("Send = %q %d %v", id, status, e)
 	}
@@ -1343,7 +1717,7 @@ func TestSendInThread(t *testing.T) {
 	if it := itemFor(t, s, "r"); !it.InThread || !it.Burst[1].InThread {
 		t.Fatalf("item not in thread: %+v", it)
 	}
-	if _, _, e := s.Send(context.Background(), sendReq("r", "hi")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r", "hi")); e != nil {
 		t.Fatal(e)
 	}
 	if api.sends[0].ParentID != "root1" || api.sends[0].RoomID != "r" {
@@ -1354,7 +1728,7 @@ func TestSendInThread(t *testing.T) {
 func TestSendErrorIsSendUnknown(t *testing.T) {
 	s, api, clock := sendFixture(t)
 	api.sendErr = errors.New("executing request: connection reset")
-	_, status, e := s.Send(context.Background(), sendReq("r", "hi"))
+	_, status, e := s.Send(context.Background(), sendReq(s, "r", "hi"))
 	if e == nil || e.Code != CodeSendUnknown || status != http.StatusBadGateway {
 		t.Fatalf("Send = %d %v", status, e)
 	}
@@ -1373,7 +1747,7 @@ func TestSendErrorIsSendUnknown(t *testing.T) {
 	}
 	// The user may send again by hand after being warned.
 	api.sendErr = nil
-	if _, _, e := s.Send(context.Background(), sendReq("r", "hi")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "r", "hi")); e != nil {
 		t.Fatalf("manual resend = %v", e)
 	}
 }
@@ -1392,7 +1766,7 @@ func TestSendPerRoomLock(t *testing.T) {
 	}
 	first := make(chan result, 1)
 	go func() {
-		_, st, e := s.Send(context.Background(), sendReq("r", "one"))
+		_, st, e := s.Send(context.Background(), sendReq(s, "r", "one"))
 		first <- result{st, e}
 	}()
 	<-entered
@@ -1402,7 +1776,7 @@ func TestSendPerRoomLock(t *testing.T) {
 	clock.set(testNow.Add(10 * time.Second)) // not the rate limit
 	second := make(chan result, 1)
 	go func() {
-		_, st, e := s.Send(context.Background(), sendReq("r", "two"))
+		_, st, e := s.Send(context.Background(), sendReq(s, "r", "two"))
 		second <- result{st, e}
 	}()
 	select {
@@ -1487,7 +1861,7 @@ func TestItemsSortAndHide(t *testing.T) {
 	s.wait()
 	_ = s.Snooze("snoozed-new", 3)
 	_ = s.Dismiss("dismissed", DismissOther)
-	if _, _, e := s.Send(context.Background(), sendReq("sent", "hi")); e != nil {
+	if _, _, e := s.Send(context.Background(), sendReq(s, "sent", "hi")); e != nil {
 		t.Fatal(e)
 	}
 	if got, want := itemIDs(s.Items(false)), []string{"drafted-new", "pending-old", "failed", "snoozed-new"}; !slices.Equal(got, want) {
@@ -1613,4 +1987,225 @@ func TestServiceOnlyGETsUntilSend(t *testing.T) {
 	_ = s.Snooze("r2", 1)
 	_ = s.Dismiss("r2", DismissOther)
 	assertNoSend(t, api)
+}
+
+// ---- Close ----
+
+// blockingDrafter ignores ctx: Close's deadline has to cut the wait short.
+type blockingDrafter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingDrafter) Mode() string { return ModeBare }
+
+func (b *blockingDrafter) Draft(context.Context, DraftInput) (*DraftOutput, error) {
+	b.started <- struct{}{}
+	<-b.release
+	return &DraftOutput{NeedsReply: true, Draft: "late"}, nil
+}
+
+func TestCloseCancelsBackgroundDrafts(t *testing.T) {
+	api := newFakeAPI()
+	for i := range maxDraftsInFlight + 1 {
+		api.addRoom(fmt.Sprintf("r%d", i), "X", theirs(fmt.Sprintf("m%d", i), time.Duration(i+1)*time.Minute))
+	}
+	d := newFakeDrafter()
+	d.gate = make(chan struct{}) // never opened: only cancellation ends a draft
+	s, _ := newTestService(t, api, d)
+	rescan(s)
+	for i := range maxDraftsInFlight + 1 {
+		if e := s.Draft(context.Background(), fmt.Sprintf("r%d", i), ""); e != nil {
+			t.Fatal(e)
+		}
+	}
+	// Two drafts run; the third waits for a slot.
+	waitFor(t, func() bool { return d.runningNow() == maxDraftsInFlight })
+	if st := s.Status(); st.Drafting != maxDraftsInFlight+1 {
+		t.Fatalf("drafting = %d, want %d (queued drafts count)", st.Drafting, maxDraftsInFlight+1)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Close(ctx); err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if n := d.runningNow(); n != 0 {
+		t.Fatalf("%d drafts still running after Close", n)
+	}
+	if n := len(d.calls()); n != maxDraftsInFlight {
+		t.Fatalf("drafter calls = %d, want %d (the queued draft never starts)", n, maxDraftsInFlight)
+	}
+	for i := range maxDraftsInFlight + 1 {
+		r, _ := s.store.Get(fmt.Sprintf("r%d", i))
+		if r.State != StateDraftFailed || r.Error != msgDraftInterrupted {
+			t.Fatalf("record r%d = %+v, want draft_failed %q", i, r, msgDraftInterrupted)
+		}
+	}
+	if st := s.Status(); st.Drafting != 0 {
+		t.Fatalf("drafting after Close = %d", st.Drafting)
+	}
+
+	// Nothing new starts, and Close is idempotent.
+	scans := len(api.callsOf("ListDirectRooms"))
+	s.Rescan(context.Background())
+	if e := s.Draft(context.Background(), "r0", ""); e == nil || e.Code != CodeBusy {
+		t.Fatalf("Draft after Close = %v", e)
+	}
+	waitBounded(t, s)
+	if n := len(api.callsOf("ListDirectRooms")); n != scans {
+		t.Fatalf("Rescan after Close scanned (%d -> %d)", scans, n)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatalf("second Close = %v", err)
+	}
+}
+
+func TestCloseCancelsScan(t *testing.T) {
+	api := newFakeAPI()
+	api.addRoom("r", "X", seq("m", 300, time.Minute, time.Minute)...)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	api.listHook = func(webex.ListMessagesOptions) {
+		select {
+		case entered <- struct{}{}:
+			<-release
+		default:
+		}
+	}
+	s, _ := newTestService(t, api, newFakeDrafter())
+	s.Rescan(context.Background())
+	<-entered
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close(context.Background()) }()
+	// Close cancels the scan before the room's next page.
+	select {
+	case <-s.rootCtx.Done():
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("Close did not cancel the scan")
+	}
+	close(release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
+	}
+	if n := len(api.callsOf("ListMessages")); n != 1 {
+		t.Fatalf("ListMessages calls = %d, want 1", n)
+	}
+}
+
+func TestCloseStopsWaitingAtDeadline(t *testing.T) {
+	api := newFakeAPI()
+	api.addRoom("r", "X", theirs("m", time.Minute))
+	d := &blockingDrafter{started: make(chan struct{}, 1), release: make(chan struct{})}
+	s, err := NewService(Config{API: api, Drafter: d, Now: func() time.Time { return testNow }, PreDraft: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescan(s)
+	if e := s.Draft(context.Background(), "r", ""); e != nil {
+		t.Fatal(e)
+	}
+	<-d.started
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = s.Close(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close = %v, want a deadline error", err)
+	}
+	close(d.release)
+	if again := s.Close(context.Background()); !errors.Is(again, context.DeadlineExceeded) {
+		t.Fatalf("second Close = %v, want the first result", again)
+	}
+	waitBounded(t, s)
+}
+
+// waitBounded is s.wait with a deadline, so a Close that fails to stop
+// background work fails the test instead of hanging it.
+func waitBounded(t *testing.T, s *Service) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		s.wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background work still running")
+	}
+}
+
+// ---- signed out in another process ----
+
+func TestSignedOutElsewhere(t *testing.T) {
+	s, api, _ := sendFixture(t)
+	before := s.store.All()
+	s.mu.Lock()
+	s.signedOut = func() bool { return true }
+	s.mu.Unlock()
+
+	if st := s.Status(); st.Error != msgSignedOut {
+		t.Fatalf("status error = %q, want %q", st.Error, msgSignedOut)
+	}
+	if _, status, e := s.Send(context.Background(), sendReq(s, "r", "hi")); e == nil || e.Code != CodeSignedOut || status != http.StatusConflict {
+		t.Fatalf("Send = %d %v", status, e)
+	}
+	if e := s.Draft(context.Background(), "r2", ""); e == nil || e.Code != CodeSignedOut {
+		t.Fatalf("Draft = %v", e)
+	}
+	if e := s.Dismiss("r2", DismissOther); e == nil || e.Code != CodeSignedOut {
+		t.Fatalf("Dismiss = %v", e)
+	}
+	if e := s.Snooze("r2", 1); e == nil || e.Code != CodeSignedOut {
+		t.Fatalf("Snooze = %v", e)
+	}
+	assertNoSend(t, api)
+	if after := s.store.All(); len(after) != len(before) {
+		t.Fatalf("records changed after sign-out: %d -> %d", len(before), len(after))
+	}
+}
+
+// ---- durable send record ----
+
+// If the sending record can't be saved, a crash after the POST would hide
+// that a reply may have gone out, so nothing is sent.
+func TestSendRefusedWhenSendingRecordCannotBeSaved(t *testing.T) {
+	path := storePath(t)
+	api := newFakeAPI()
+	api.addRoom("r", "Alice", theirs("t1", time.Minute))
+	s, _ := newTestService(t, api, newFakeDrafter(), func(c *Config) { c.StorePath = path })
+	rescan(s)
+	// Make the store directory a file, so no write can succeed.
+	dir := filepath.Dir(path)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, status, e := s.Send(context.Background(), sendReq(s, "r", "hi"))
+	if e == nil || status < 400 || (e.Code != codeInternal && e.Code != CodeSignedOut) {
+		t.Fatalf("Send = %d %v, want a refusal", status, e)
+	}
+	assertNoSend(t, api)
+	if st := itemFor(t, s, "r").State; st != StatePending {
+		t.Fatalf("state after the refused send = %s, want pending", st)
+	}
+	if st := s.Status(); st.Error == "" {
+		t.Fatal("the failed save is not shown in the status bar")
+	}
+	// The refused send did not use up the rate limit.
+	s.mu.Lock()
+	n := len(s.sendTimes)
+	s.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("send slots used = %d", n)
+	}
 }

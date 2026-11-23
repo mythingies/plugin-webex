@@ -48,10 +48,12 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// sendBlocked reports whether st forbids sending.
+// sendBlocked reports whether st forbids sending. Drafting does not: the
+// user may send their own text while a (re)draft runs, and the finished
+// draft is then discarded.
 func sendBlocked(st State) bool {
 	switch st {
-	case StateSent, StateDismissed, StateSending, StateDrafting:
+	case StateSent, StateDismissed, StateSending:
 		return true
 	}
 	return false
@@ -75,6 +77,10 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 
 	// a. The room must be pending and in a sendable state.
 	s.mu.Lock()
+	if s.isSignedOutLocked() {
+		s.mu.Unlock()
+		return "", http.StatusConflict, signedOutErr()
+	}
 	pp, ok := s.pending[req.RoomID]
 	var st State
 	if ok {
@@ -91,6 +97,14 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 	}
 	if sendBlocked(st) {
 		return "", http.StatusConflict, notPending(st)
+	}
+	// The reply must answer the burst the user was shown, not one that grew
+	// since their page last loaded.
+	if req.HeadID == "" {
+		return "", http.StatusBadRequest, &APIError{Code: codeBadRequest, Detail: "head_id is required"}
+	}
+	if req.HeadID != p.HeadID {
+		return "", http.StatusConflict, &APIError{Code: CodeNewMessages, Detail: "new messages arrived since you opened this conversation; read them before replying"}
 	}
 
 	// b-f. Text checks.
@@ -123,13 +137,18 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 		return "", status, apiErr
 	}
 
-	// i. Record sending, then post exactly once.
+	// i. Record sending durably, then post exactly once.
 	s.mu.Lock()
 	cur, ok := s.pending[req.RoomID]
 	if !ok || cur.HeadID != p.HeadID {
 		s.mu.Unlock()
 		s.releaseSend(slot)
 		return "", http.StatusConflict, &APIError{Code: CodeNewMessages, Detail: "the conversation changed during the check; rescan"}
+	}
+	if s.isSignedOutLocked() {
+		s.mu.Unlock()
+		s.releaseSend(slot)
+		return "", http.StatusConflict, signedOutErr()
 	}
 	e, r, has := s.effectiveLocked(cur)
 	if sendBlocked(e.state) {
@@ -141,22 +160,44 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 	if has {
 		draft = r.Draft
 	}
+	// While sending is set, Draft, Dismiss and Snooze refuse the room and a
+	// finishing draft is discarded, so nothing overwrites the records below
+	// while s.mu is released for the synchronous writes.
 	s.sending[p.RoomID] = true
-	s.putLocked(Record{RoomID: p.RoomID, HeadID: p.HeadID, State: StateSending, Draft: draft})
 	s.mu.Unlock()
 
-	msg, err := s.api.SendMessage(p.RoomID, "", "", p.ParentID, sanitized, "")
+	base := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, Draft: draft}
+	sendingRec := base
+	sendingRec.State = StateSending
+	if err := s.putSync(sendingRec); err != nil {
+		// Without the sending record on disk a crash after the POST would
+		// hide that a reply may have gone out, so nothing is sent.
+		restore := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StatePending}
+		if has {
+			restore = r
+		}
+		s.mu.Lock()
+		if err := s.store.Put(restore); err != nil {
+			slog.Warn("replydesk: restoring state after a failed save", "err", err)
+		}
+		delete(s.sending, p.RoomID)
+		s.mu.Unlock()
+		s.releaseSend(slot)
+		return "", http.StatusInternalServerError, &APIError{Code: codeInternal, Detail: shortErr("could not save Reply Desk state, so nothing was sent: ", err)}
+	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.sending, p.RoomID)
+	msg, err := s.api.SendMessage(p.RoomID, "", "", p.ParentID, sanitized, "")
 	if err != nil || msg == nil {
 		if err == nil {
 			err = errors.New("webex returned no message")
 		}
 		slog.Warn("replydesk: send failed; not retrying", "room_id", p.RoomID, "err", err)
 		apiErr := &APIError{Code: CodeSendUnknown, Detail: shortErr("the send may or may not have gone through; check Webex before sending again: ", err)}
-		s.putLocked(Record{RoomID: p.RoomID, HeadID: p.HeadID, State: StateSendUnknown, Draft: draft, Error: apiErr.Detail})
+		unknown := base
+		unknown.State = StateSendUnknown
+		unknown.Error = apiErr.Detail
+		_ = s.putSync(unknown) // a failure is surfaced in Status; the sending record already covers a crash
+		s.doneSending(p.RoomID)
 		return "", http.StatusBadGateway, apiErr
 	}
 
@@ -168,16 +209,22 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 		sentDraft.HeadID = p.HeadID
 	}
 	sentDraft.Text = sanitized
-	s.putLocked(Record{
-		RoomID:        p.RoomID,
-		HeadID:        p.HeadID,
-		State:         StateSent,
-		Draft:         sentDraft,
-		SentMessageID: msg.ID,
-		SentSHA256:    sum,
-	})
+	sent := base
+	sent.State = StateSent
+	sent.Draft = sentDraft
+	sent.SentMessageID = msg.ID
+	sent.SentSHA256 = sum
+	_ = s.putSync(sent) // a failure is surfaced in Status; the record is kept in memory
+	s.doneSending(p.RoomID)
 	slog.Info("audit", "tool", "replydesk", "action", "send", "room_id", p.RoomID, "message_id", msg.ID, "bytes", len(sanitized), "sha256", sum)
 	return msg.ID, http.StatusOK, nil
+}
+
+// doneSending clears the in-flight send mark for a room.
+func (s *Service) doneSending(roomID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sending, roomID)
 }
 
 // reserveSend takes a send slot if the rate limit allows one.
@@ -281,15 +328,14 @@ func (s *Service) Dismiss(roomID, reason string) *APIError {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.pending[roomID]
-	if !ok {
-		return notPending("")
+	p, e, r, has, apiErr := s.closableLocked(roomID)
+	if apiErr != nil {
+		return apiErr
 	}
-	e, r, has := s.effectiveLocked(p)
 	if e.state == StateSent || e.state == StateSending {
 		return notPending(e.state)
 	}
-	rec := Record{RoomID: roomID, HeadID: p.HeadID, State: StateDismissed, DismissReason: reason}
+	rec := Record{RoomID: roomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StateDismissed, DismissReason: reason}
 	if has {
 		rec.Draft = r.Draft
 	}
@@ -304,18 +350,34 @@ func (s *Service) Snooze(roomID string, hours int) *APIError {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.pending[roomID]
-	if !ok {
-		return notPending("")
+	p, e, r, has, apiErr := s.closableLocked(roomID)
+	if apiErr != nil {
+		return apiErr
 	}
-	e, r, has := s.effectiveLocked(p)
 	if e.state == StateSent || e.state == StateSending {
 		return notPending(e.state)
 	}
-	rec := Record{RoomID: roomID, HeadID: p.HeadID, State: StateSnoozed, SnoozeUntil: s.now().Add(time.Duration(hours) * time.Hour).UTC()}
+	rec := Record{RoomID: roomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StateSnoozed, SnoozeUntil: s.now().Add(time.Duration(hours) * time.Hour).UTC()}
 	if has {
 		rec.Draft = r.Draft
 	}
 	s.putLocked(rec)
 	return nil
+}
+
+// closableLocked looks up a room for Dismiss or Snooze: signed out, unknown,
+// and mid-send rooms are refused. s.mu must be held.
+func (s *Service) closableLocked(roomID string) (*Pending, effective, Record, bool, *APIError) {
+	if s.isSignedOutLocked() {
+		return nil, effective{}, Record{}, false, signedOutErr()
+	}
+	p, ok := s.pending[roomID]
+	if !ok {
+		return nil, effective{}, Record{}, false, notPending("")
+	}
+	if s.sending[roomID] {
+		return nil, effective{}, Record{}, false, notPending(StateSending)
+	}
+	e, r, has := s.effectiveLocked(p)
+	return p, e, r, has, nil
 }

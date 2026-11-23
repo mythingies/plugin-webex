@@ -292,7 +292,7 @@ func TestReadReceiptInvariant(t *testing.T) {
 
 	sendStart := len(e.requests())
 	text := it.Draft.Text
-	id, status, apiErr := s.Send(context.Background(), sendReq("room-a", text))
+	id, status, apiErr := s.Send(context.Background(), sendReq(s, "room-a", text))
 	if apiErr != nil || status != http.StatusOK || id != "posted-1" {
 		t.Fatalf("Send = %q %d %v", id, status, apiErr)
 	}
@@ -347,7 +347,10 @@ func TestReadReceiptInvariantThroughServe(t *testing.T) {
 	defer func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				t.Errorf("review server: %v", err)
+			}
 		case <-time.After(10 * time.Second):
 			t.Error("review server did not stop")
 		}
@@ -445,12 +448,15 @@ func TestReadReceiptInvariantThroughServe(t *testing.T) {
 		return false
 	})
 
+	if drafted.HeadID == "" {
+		t.Fatal("item has no head_id to echo")
+	}
 	sendStart := len(e.requests())
 	text := drafted.Draft.Text
 	var sent struct {
 		MessageID string `json:"message_id"`
 	}
-	if st := call(http.MethodPost, "/api/send", SendRequest{RoomID: "room-a", Text: text, TextSHA256: sha256Hex(text)}, &sent); st != http.StatusOK || sent.MessageID != "posted-1" {
+	if st := call(http.MethodPost, "/api/send", SendRequest{RoomID: "room-a", HeadID: drafted.HeadID, Text: text, TextSHA256: sha256Hex(text)}, &sent); st != http.StatusOK || sent.MessageID != "posted-1" {
 		t.Fatalf("send = %d %+v", st, sent)
 	}
 	reqs := e.requests()

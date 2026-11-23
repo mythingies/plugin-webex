@@ -43,14 +43,19 @@ func (s *Service) buildDraftInput(ctx context.Context, p *Pending, instruction, 
 	return in, refs
 }
 
-// priorMessages returns the user's own messages in p's room: those in the
-// context plus those in older history (up to groundMaxPages pages,
-// groundMaxMessages messages, and groundMaxAge old).
+// priorMessages returns the user's own messages in p's room older than the
+// context (up to groundMaxPages pages, groundMaxMessages messages, and
+// groundMaxAge old). Messages in the burst or context are left out: the
+// drafter already sees them under b/c refs, and a p ref for the same message
+// would let one message be cited twice.
 func (s *Service) priorMessages(ctx context.Context, p *Pending) []webex.Message {
 	var mine []webex.Message
-	for _, m := range p.Context {
-		if m.PersonID == s.me {
-			mine = append(mine, m)
+	shown := make(map[string]bool, len(p.Burst)+len(p.Context))
+	for _, ms := range [][]webex.Message{p.Burst, p.Context} {
+		for i := range ms {
+			if ms[i].ID != "" {
+				shown[ms[i].ID] = true
+			}
 		}
 	}
 
@@ -88,7 +93,7 @@ func (s *Service) priorMessages(ctx context.Context, p *Pending) []webex.Message
 				break
 			}
 			fetched++
-			if msgs[i].PersonID == s.me {
+			if msgs[i].PersonID == s.me && !shown[msgs[i].ID] {
 				mine = append(mine, msgs[i])
 			}
 		}
