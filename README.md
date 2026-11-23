@@ -240,7 +240,7 @@ You can edit the draft, **Regenerate** it with an instruction ("shorter", "decli
 | `isolated` | otherwise | Your Claude Code login; your hooks still run |
 | `off` | `claude` not on `PATH` | No drafts; the inbox and manual replies still work |
 
-The page listens on `127.0.0.1` on a random port and opens with a single-use link. It shuts down after 30 minutes idle (8 hours at most), or when you click Close. Drafts and per-conversation state are kept in `replydesk.json` in the webex-mcp config directory (0600, bound to your account, pruned after 30 days), and `--logout` / `--switch` delete it. Design and security notes: [ADR 0002](docs/adr/0002-reply-desk.md) and the 2026-11-23 addendum in [THREAT_MODEL.md](THREAT_MODEL.md).
+The page listens on `127.0.0.1` on a random port and opens with a single-use link. Only one `--review` runs at a time. It shuts down after 30 minutes idle (8 hours at most), or when you click Close. Drafts and per-conversation state are kept in `replydesk.json` in the webex-mcp config directory (0600, bound to your account, pruned after 30 days), and `--logout` / `--switch` delete it. Design and security notes: [ADR 0002](docs/adr/0002-reply-desk.md) and the 2026-11-23 addendum in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Architecture
 

@@ -233,7 +233,7 @@ func writeDryRun(out io.Writer, pending []replydesk.Pending, now time.Time) erro
 	} else {
 		fmt.Fprintf(&b, "%d direct message conversation(s) awaiting your reply:\n", len(pending))
 		for _, p := range pending {
-			fmt.Fprintf(&b, "\n%s (%s ago)\n  %s\n", terminalSafe(p.RoomTitle), now.Sub(p.HeadCreated).Round(time.Minute), terminalSafe(p.Reason))
+			fmt.Fprintf(&b, "\n%s (%s ago)\n  %s\n", terminalSafe(p.RoomTitle), humanDuration(now.Sub(p.HeadCreated)), terminalSafe(p.Reason))
 			if len(p.Flags) > 0 {
 				fmt.Fprintf(&b, "  flags: %s\n", terminalSafe(strings.Join(p.Flags, ", ")))
 			}
@@ -288,4 +288,27 @@ func isBidiOrSeparator(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// humanDuration renders a duration the way people say it: "45m", "3h31m",
+// "2d5h", "7d".
+func humanDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "<1m"
+	}
+	d = d.Round(time.Minute)
+	days, rem := d/(24*time.Hour), d%(24*time.Hour)
+	hours, mins := rem/time.Hour, (rem%time.Hour)/time.Minute
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%dd%dh", days, hours)
+	case days > 0:
+		return fmt.Sprintf("%dd", days)
+	case hours > 0 && mins > 0:
+		return fmt.Sprintf("%dh%dm", hours, mins)
+	case hours > 0:
+		return fmt.Sprintf("%dh", hours)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
 }

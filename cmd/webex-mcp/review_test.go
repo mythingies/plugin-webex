@@ -84,7 +84,7 @@ func TestWriteDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, want := range []string{"1 direct message", "Alice (1h30m0s ago)", "2 messages since", "flags: attachment", "> hey, quick one", "> [no text]"} {
+	for _, want := range []string{"1 direct message", "Alice (1h30m ago)", "2 messages since", "flags: attachment", "> hey, quick one", "> [no text]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -147,7 +147,7 @@ func TestWriteDryRun_StripsControlCharacters(t *testing.T) {
 			t.Errorf("output contains control character %U:\n%q", []rune(bad)[0], out)
 		}
 	}
-	for _, want := range []string{"Mallory ]0;pwned txt.exe (0s ago)", "1 message [2J fake line", "> click [31m here 1m x"} {
+	for _, want := range []string{"Mallory ]0;pwned txt.exe (<1m ago)", "1 message [2J fake line", "> click [31m here 1m x"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%q", want, out)
 		}
@@ -306,5 +306,22 @@ func TestReviewFailure_AlreadyRunning(t *testing.T) {
 	}
 	if got := reviewFailure(errors.New("boom")); got != "review: boom" {
 		t.Errorf("reviewFailure = %q", got)
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	cases := map[time.Duration]string{
+		10 * time.Second:                "<1m",
+		45 * time.Minute:                "45m",
+		3*time.Hour + 31*time.Minute:    "3h31m",
+		2 * time.Hour:                   "2h",
+		53*time.Hour + 10*time.Minute:   "2d5h",
+		7 * 24 * time.Hour:              "7d",
+		7*24*time.Hour + 20*time.Second: "7d",
+	}
+	for in, want := range cases {
+		if got := humanDuration(in); got != want {
+			t.Errorf("humanDuration(%v) = %q, want %q", in, got, want)
+		}
 	}
 }

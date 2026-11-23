@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The prompt-injection wrapper did not escape its own closing tag, so a Webex message containing `</external-message>` could end the sandbox early in any tool's output. `safetext.Sandbox` now neutralizes opening and closing wrapper tags, case-insensitive and including whitespace variants (THREAT_MODEL F19).
 - Outbound text now also blocks the `<@all>` broadcast mention (F24).
 - OAuth token refresh is serialized across processes with a lock file in the config directory. Under the lock, the stored tokens are reloaded, and refresh happens only if they are still stale, so concurrent Claude Code sessions and `--review` no longer race on the same refresh token (F20).
-- THREAT_MODEL.md: the stale setup entry point is fixed, and a Reply Desk addendum adds trust boundaries TB7-TB9 and findings F19-F26.
+- After `--logout` or `--switch`, a running MCP server or `--review` used to keep the old session, could re-save it at its next refresh, or could adopt the newly signed-in account's tokens. Stored tokens now carry a session ID, and a process whose session vanished or changed gets `auth.ErrSignedOut` instead (F27).
+- MCP tool output now cleans room titles, display names and similar Webex-controlled labels with `safetext.Label`, and a preview cut mid-tag can no longer leave a partial sandbox tag (F28).
+- THREAT_MODEL.md: the stale setup entry point is fixed, and a Reply Desk addendum adds trust boundaries TB7-TB9 and findings F19-F28.
 - `share_file` reads only regular files, not symlinks, up to 100 MB, under the working directory, the OS temp directory, or a directory in `WEBEX_SHARE_DIRS`. It refuses a path with a hidden component, such as `.ssh`, and key, credential, token, and `.env` file names, so a Webex message cannot talk the model into uploading a secret. Refusals are audit-logged.
 
 ## [0.9.5] - 2026-10-01
