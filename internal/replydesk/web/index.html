@@ -1,2 +1,161 @@
 <!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="csrf-token" content="{{.CSRF}}">
 <title>Reply Desk</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="statusbar">
+  <h1>Reply Desk</h1>
+  <span id="st-me" class="st-item"></span>
+  <span id="st-mode" class="st-item badge"></span>
+  <span id="st-scan" class="st-item"></span>
+  <span id="st-activity" class="st-item activity" aria-live="polite"></span>
+  <span id="st-lookback" class="st-item muted"></span>
+  <span class="spacer"></span>
+  <button type="button" id="btn-rescan">Rescan</button>
+  <button type="button" id="btn-help" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
+  <button type="button" id="btn-close">Close</button>
+</header>
+
+<div id="banner-lock" class="banner banner-error" role="alert" hidden></div>
+<div id="banner-drafter" class="banner banner-warn" hidden>Drafting unavailable - you can still write replies</div>
+<div id="banner-error" class="banner banner-error" hidden></div>
+
+<main class="layout">
+  <nav class="inbox" aria-label="Inbox">
+    <label class="toggle"><input type="checkbox" id="chk-all"> Show sent &amp; dismissed</label>
+    <div id="inbox-groups"></div>
+    <p id="inbox-empty" class="empty" hidden>Nothing is waiting for a reply.</p>
+  </nav>
+
+  <section class="detail" aria-label="Selected conversation">
+    <p id="detail-empty" class="empty">Select a conversation on the left.</p>
+    <div id="detail" hidden>
+      <div class="detail-head">
+        <h2 id="d-title"></h2>
+        <span id="d-state" class="badge"></span>
+      </div>
+      <p id="d-reason" class="reason"></p>
+      <div id="d-notices"></div>
+      <ul id="d-flags" class="flags-explained"></ul>
+
+      <section class="card" aria-labelledby="h-ask">
+        <h3 id="h-ask">What's being asked</h3>
+        <div id="d-ask-body"></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-convo">
+        <h3 id="h-convo">Conversation</h3>
+        <ol id="d-convo" class="convo"></ol>
+      </section>
+
+      <section id="d-cited-sec" class="card" aria-labelledby="h-cited" hidden>
+        <h3 id="h-cited">Your earlier messages used</h3>
+        <div id="d-cited"></div>
+      </section>
+
+      <section class="card editor" aria-labelledby="h-editor">
+        <h3 id="h-editor"><label for="editor">Your reply</label></h3>
+        <div id="d-stale" class="notice warn" hidden>New messages arrived after this draft - regenerate or review carefully</div>
+        <div id="d-newdraft" class="notice info" hidden>
+          A new draft is available - Replace?
+          <button type="button" id="btn-replace">Replace</button>
+          <button type="button" id="btn-keep">Keep mine</button>
+        </div>
+        <div id="d-drafting" class="notice info" hidden>Drafting...</div>
+        <textarea id="editor" rows="10" spellcheck="true"></textarea>
+        <div class="editor-meta">
+          <span id="d-fills" class="fills" hidden></span>
+          <button type="button" id="btn-nextfill" class="small" hidden>Next placeholder</button>
+          <span class="spacer"></span>
+          <span id="d-bytes" class="bytes"></span>
+        </div>
+
+        <div class="regen">
+          <label for="regen-input">Regenerate with an instruction</label>
+          <div class="regen-row">
+            <input id="regen-input" type="text" maxlength="500" autocomplete="off" placeholder="e.g. shorter, more formal, say I will check tomorrow">
+            <button type="button" id="btn-regen">Regenerate</button>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="button" id="btn-send" class="primary" title="Send (Ctrl+Enter)">Send...</button>
+          <button type="button" id="btn-copy">Copy</button>
+          <div class="menu-wrap">
+            <button type="button" id="btn-dismiss" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-dismiss" title="Dismiss (d)">Dismiss</button>
+            <div id="menu-dismiss" class="menu" role="menu" aria-label="Dismiss reason" hidden>
+              <button type="button" role="menuitem" data-reason="no_reply_needed">No reply needed</button>
+              <button type="button" role="menuitem" data-reason="replied_elsewhere">Replied elsewhere</button>
+              <button type="button" role="menuitem" data-reason="reacted">Reacted instead</button>
+              <button type="button" role="menuitem" data-reason="other">Other</button>
+            </div>
+          </div>
+          <div class="menu-wrap">
+            <button type="button" id="btn-snooze" aria-haspopup="menu" aria-expanded="false" aria-controls="menu-snooze" title="Snooze (s)">Snooze</button>
+            <div id="menu-snooze" class="menu" role="menu" aria-label="Snooze for" hidden>
+              <button type="button" role="menuitem" data-hours="1">1 hour</button>
+              <button type="button" role="menuitem" data-hours="4">4 hours</button>
+              <button type="button" role="menuitem" data-hours="24">Tomorrow (24 hours)</button>
+              <button type="button" role="menuitem" data-hours="72">3 days</button>
+            </div>
+          </div>
+          <span id="d-send-why" class="hint"></span>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<dialog id="dlg-confirm" aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Send this reply?</h2>
+  <p>To: <strong id="confirm-to"></strong> <span id="confirm-thread" class="muted"></span></p>
+  <pre id="confirm-text" class="msg-text final" tabindex="-1"></pre>
+  <p id="confirm-bytes" class="hint"></p>
+  <div id="confirm-error" class="notice error" role="alert" hidden></div>
+  <div id="confirm-compare" class="compare" hidden>
+    <div>
+      <h3>You wrote</h3>
+      <pre id="cmp-orig" class="msg-text"></pre>
+    </div>
+    <div>
+      <h3>Will be sent</h3>
+      <pre id="cmp-san" class="msg-text"></pre>
+    </div>
+  </div>
+  <div class="dlg-actions">
+    <span id="confirm-extra" class="extra"></span>
+    <span class="spacer"></span>
+    <button type="button" id="confirm-cancel">Cancel</button>
+    <button type="button" id="confirm-send" class="primary">Send</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-help" aria-labelledby="help-title">
+  <h2 id="help-title">Keyboard shortcuts</h2>
+  <table class="shortcuts">
+    <tbody>
+      <tr><th scope="row"><kbd>j</kbd> / <kbd>k</kbd></th><td>Next / previous conversation</td></tr>
+      <tr><th scope="row"><kbd>e</kbd></th><td>Edit the reply</td></tr>
+      <tr><th scope="row"><kbd>r</kbd></th><td>Regenerate instruction</td></tr>
+      <tr><th scope="row"><kbd>d</kbd></th><td>Dismiss menu</td></tr>
+      <tr><th scope="row"><kbd>s</kbd></th><td>Snooze menu</td></tr>
+      <tr><th scope="row"><kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>Enter</kbd></th><td>Review and send</td></tr>
+      <tr><th scope="row"><kbd>Esc</kbd></th><td>Close dialog or menu, leave the editor</td></tr>
+      <tr><th scope="row"><kbd>?</kbd></th><td>This help</td></tr>
+    </tbody>
+  </table>
+  <p class="hint">Letter shortcuts are ignored while typing in a text field.</p>
+  <div class="dlg-actions"><span class="spacer"></span><button type="button" id="help-close">Close</button></div>
+</dialog>
+
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>
