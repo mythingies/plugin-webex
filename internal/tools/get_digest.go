@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -103,7 +104,7 @@ func registerGetDigest(s *mcpserver.MCPServer, client *webex.Client) {
 
 				// Capture first few messages as highlights.
 				if len(d.Highlights) < 5 {
-					preview := sandboxText(msg.Text)
+					preview := safetext.Sandbox(msg.Text)
 					if len(preview) > 200 {
 						preview = preview[:200] + "...</external-message>"
 					}

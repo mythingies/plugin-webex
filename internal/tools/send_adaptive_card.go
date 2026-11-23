@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -17,7 +18,7 @@ func sanitizeCardBody(card map[string]interface{}) {
 		switch v := val.(type) {
 		case string:
 			if key == "text" || key == "value" || key == "placeholder" || key == "title" {
-				card[key] = sanitizeOutboundText(v)
+				card[key] = safetext.Sanitize(v)
 			}
 		case map[string]interface{}:
 			sanitizeCardBody(v)

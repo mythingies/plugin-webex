@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -100,11 +101,11 @@ func registerGetCrossSpaceContext(s *mcpserver.MCPServer, client *webex.Client) 
 			text += fmt.Sprintf("### %s (%d match%s)\n\n", sr.Title, len(sr.Matches), pluralize(len(sr.Matches)))
 			for _, m := range sr.Matches {
 				if m.Before != nil {
-					text += fmt.Sprintf("  _%s (%s)_: %s\n", maskEmail(m.Before.PersonEmail), m.Before.Created, sandboxText(truncate(m.Before.Text, 100)))
+					text += fmt.Sprintf("  _%s (%s)_: %s\n", maskEmail(m.Before.PersonEmail), m.Before.Created, safetext.Sandbox(truncate(m.Before.Text, 100)))
 				}
-				text += fmt.Sprintf("  **%s (%s): %s** ← match\n", maskEmail(m.Message.PersonEmail), m.Message.Created, sandboxText(truncate(m.Message.Text, 150)))
+				text += fmt.Sprintf("  **%s (%s): %s** ← match\n", maskEmail(m.Message.PersonEmail), m.Message.Created, safetext.Sandbox(truncate(m.Message.Text, 150)))
 				if m.After != nil {
-					text += fmt.Sprintf("  _%s (%s)_: %s\n", maskEmail(m.After.PersonEmail), m.After.Created, sandboxText(truncate(m.After.Text, 100)))
+					text += fmt.Sprintf("  _%s (%s)_: %s\n", maskEmail(m.After.PersonEmail), m.After.Created, safetext.Sandbox(truncate(m.After.Text, 100)))
 				}
 				text += "\n"
 			}

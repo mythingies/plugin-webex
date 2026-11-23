@@ -9,6 +9,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"github.com/mythingies/plugin-webex/internal/buffer"
+	"github.com/mythingies/plugin-webex/internal/safetext"
 )
 
 func registerGetPriorityInbox(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
@@ -51,7 +52,7 @@ func registerGetPriorityInbox(s *mcpserver.MCPServer, buf *buffer.RingBuffer) {
 		agents := make([]string, 0, len(messages))
 		for _, msg := range messages {
 			text += fmt.Sprintf("- [%s] **%s** in **%s** (%s, agent: %s): %s\n",
-				msg.Priority, maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, sandboxText(msg.Text))
+				msg.Priority, maskEmail(msg.PersonEmail), msg.RoomTitle, msg.Created.Format("15:04:05"), msg.RoutedAgent, safetext.Sandbox(msg.Text))
 			if msg.RoutedAgent != "" {
 				agents = append(agents, msg.RoutedAgent)
 			}

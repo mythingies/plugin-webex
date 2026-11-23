@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/mythingies/plugin-webex/internal/safetext"
 )
 
 func TestReadShareable(t *testing.T) {
@@ -66,7 +68,7 @@ func TestMessageBody(t *testing.T) {
 	if _, _, res := messageBody(req(nil), false); res != nil {
 		t.Error("optional body without text or markdown was refused")
 	}
-	if _, _, res := messageBody(req(map[string]any{"markdown": strings.Repeat("a", maxMessageLen+1)}), true); res == nil {
+	if _, _, res := messageBody(req(map[string]any{"markdown": strings.Repeat("a", safetext.MaxMessageLen+1)}), true); res == nil {
 		t.Error("over-long markdown was accepted")
 	}
 	text, md, res := messageBody(req(map[string]any{"text": "a\nb", "markdown": "**x**\n[y](javascript:alert(1))"}), true)

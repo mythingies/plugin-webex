@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -87,7 +88,7 @@ func searchSpace(client *webex.Client, roomID, queryLower string, maxMessages in
 	var matches []string
 	for _, msg := range messages {
 		if strings.Contains(strings.ToLower(msg.Text), queryLower) {
-			matches = append(matches, fmt.Sprintf("**%s** (%s): %s", maskEmail(msg.PersonEmail), msg.Created, sandboxText(msg.Text)))
+			matches = append(matches, fmt.Sprintf("**%s** (%s): %s", maskEmail(msg.PersonEmail), msg.Created, safetext.Sandbox(msg.Text)))
 		}
 	}
 	return matches, nil
