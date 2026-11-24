@@ -36,6 +36,9 @@ func main() {
 		case "--logout":
 			handleLogout()
 			return
+		case "--review":
+			handleReview(os.Args[2:])
+			return
 		}
 	}
 

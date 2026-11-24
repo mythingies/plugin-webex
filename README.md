@@ -13,6 +13,7 @@ Cisco Webex integration for Claude Code — read messages, send replies, monitor
 > - **Aggregation tools** like `get_digest` (per-space activity summary) and `get_cross_space_context` (search-with-context across all your spaces)
 > - **Local-only operation** with PAT (no WCIT, no integration registration, no traffic through Cisco's MCP infra)
 > - **Skill-only mode** — pure curl wrapper, no binary, useful for sandboxed environments
+> - **Reply Desk** (`webex-mcp --review`) — finds direct messages you haven't answered and drafts replies you edit and approve in a local web page
 >
 > The two can also coexist — register both and Claude Code uses whichever tool fits the request.
 
@@ -213,6 +214,33 @@ Because reading never clears a reminder, you don't lose track of what's
 outstanding just by opening a message — and because "processed" is local-only,
 a sender never sees a "read" they'd mistake for "seen and ignored." The list
 persists across restarts at `~/.config/webex-mcp/pending.json` (0600).
+
+## Reply Desk: draft replies to unanswered direct messages
+
+```bash
+webex-mcp --review              # scan, draft, and open the review page
+webex-mcp --review --dry-run    # just list what's waiting on you; no drafting, no UI
+```
+
+Reply Desk goes through your 1:1 direct messages from the last 7 days (`--lookback 36h`, `--lookback 14d`, up to 90d) and finds the ones waiting on you. A conversation is waiting when the other person has written since your last message there. Everything they sent since then is treated as one ask, so three quick messages become one item. This is based on what you have *answered*, not what you have *read*: nothing is marked read, and a message you read on your phone but never answered still shows up.
+
+For each conversation, the review page shows:
+
+- **What's being asked**: a summary, each ask as a checklist item, and anything you would need to supply.
+- **The conversation**: their messages, with your earlier ones for context.
+- **A draft reply** in your voice, grounded only in what you have said before *in that same conversation*. The page lists the earlier messages the draft relied on. When nothing you've said answers the question, the draft is a short holding reply or a clarifying question with `[[FILL: …]]` gaps, and it can't be sent until you fill them.
+
+You can edit the draft, **Regenerate** it with an instruction ("shorter", "decline politely"), **Copy** it, **Dismiss** the item (no reply needed / replied elsewhere / reacted), **Snooze** it, or **Send**. Send shows the exact text first. Right before sending, Reply Desk checks again whether you already replied, whether new messages arrived, and whether the ask was edited or deleted. Keyboard: `j`/`k` move, `e` edit, `r` regenerate, `d` dismiss, `s` snooze, `Ctrl+Enter` send, `?` help.
+
+**Drafting** runs `claude -p` (the Claude Code CLI) as a subprocess that has **no tools and no MCP servers**. It only receives the messages above and only returns JSON. It cannot send, read files, or call Webex; only your click sends. `--drafter` picks the mode:
+
+| Mode | When `auto` picks it | Auth |
+|---|---|---|
+| `bare` | `ANTHROPIC_API_KEY` or Bedrock/Vertex/Foundry is configured | API key or provider credentials only; skips hooks and plugins |
+| `isolated` | otherwise | Your Claude Code login; your hooks still run |
+| `off` | `claude` not on `PATH` | No drafts; the inbox and manual replies still work |
+
+The page listens on `127.0.0.1` on a random port and opens with a single-use link. Only one `--review` runs at a time. It shuts down after 30 minutes idle (8 hours at most), or when you click Close. Drafts and per-conversation state are kept in `replydesk.json` in the webex-mcp config directory (0600, bound to your account, pruned after 30 days), and `--logout` / `--switch` delete it. Design and security notes: [ADR 0002](docs/adr/0002-reply-desk.md) and the 2026-11-23 addendum in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Architecture
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-24
+
+### Added
+- **Reply Desk** (`webex-mcp --review`, ADR 0002): finds 1:1 direct messages where the other person has written since your last reply, drafts a reply grounded in what you said earlier in that conversation, and opens a loopback review page. There you edit, regenerate with an instruction, copy, dismiss, snooze, or send each reply. `--dry-run` lists what is waiting without drafting. Drafting runs `claude -p` with no tools and no MCP servers (`--drafter auto|bare|isolated|off`). Nothing is marked read; only an explicit Send posts, after a live re-check for edits, deletes, new messages, and replies made elsewhere. Drafts without a grounded answer use `[[FILL: …]]` placeholders that block sending.
+- `webex.Client`: `ListDirectRooms` with Link-header paging (it follows only next links on the API base URL), `ListMessages` with `beforeMessage`/`parentId`/`mentionedPeople`, `GetMessage`, `Retry-After` handling for 429/423 (waits of up to 30 s are retried in place), and a smaller-page retry after a 504. `Message` now carries `markdown`, `updated`, `mentionedPeople`, `mentionedGroups`, `attachments`, and `isVoiceClip`.
+
+### Fixed
+- `--review` now also shuts down cleanly on SIGTERM, on SIGHUP (Unix), and when its console window is closed (Windows), so the instance lock is released. `--dry-run` no longer reports "No unanswered direct messages" when conversations could not be checked. `.mcp.json` replacement retries a Windows sharing violation.
+- `.mcp.json` is now written through a temp file and a rename, so the result is mode 0600 even when the file already existed with wider permissions. Setup warns when it writes a PAT into a `.mcp.json` that also holds other servers, since such files are often committed.
+- `.gitignore` ignored every path named `webex-mcp`, including new files under `cmd/webex-mcp/`. The binary patterns are now anchored to the repo root.
+- `SendMessage` and `ShareFile` return typed errors: a 404 matches `webex.ErrNotFound`, and a 429 is a `*webex.RateLimitError` whose message reads "webex API rate limited (status 429), retry after Ns". POSTs are never retried.
+
+### Security
+- OAuth token refresh is serialized across processes with a lock file in the config directory. Under the lock, the stored tokens are reloaded, and refresh happens only if they are still stale, so concurrent Claude Code sessions and `--review` no longer race on the same refresh token (F20).
+- After `--logout` or `--switch`, a running MCP server or `--review` used to keep the old session, could re-save it at its next refresh, or could adopt the newly signed-in account's tokens. Stored tokens now carry a session ID, and a process whose session vanished or changed gets `auth.ErrSignedOut` instead. A refresh already in flight re-checks the store before saving. `--logout` and new sign-ins wait for it. A session stored for a different client ID is never overwritten (F27).
+- THREAT_MODEL.md: the stale setup entry point is fixed, and a Reply Desk addendum adds trust boundaries TB7-TB9 and findings F20-F23 and F25-F27.
+
 ## [0.9.6] - 2026-11-24
 
 ### Added

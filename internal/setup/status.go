@@ -2,10 +2,12 @@ package setup
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/mythingies/plugin-webex/internal/auth"
+	"github.com/mythingies/plugin-webex/internal/replydesk"
 )
 
 // ExistingAuth describes a currently-stored OAuth session.
@@ -79,17 +81,37 @@ func evalExistingAuth(tokens *auth.StoredTokens, now time.Time, validate func(st
 	return nil
 }
 
-// Logout removes stored OAuth tokens so the next setup run authenticates from
-// scratch (used by --switch and --logout). The OAuth client secret is left in
-// place — switching Webex user under the same integration only needs the
-// tokens cleared. A missing token entry is not an error.
+// Logout removes stored OAuth tokens and Reply Desk state so the next setup
+// run authenticates from scratch (used by --switch and --logout). The OAuth
+// client secret is left in place — switching Webex user under the same
+// integration only needs the tokens cleared. A missing token entry is not an
+// error.
+//
+// Reply Desk state is purged even when the tokens can't be removed: the
+// drafts belong to the account being signed out, and a failed keychain call
+// must not leave them behind. Both errors are returned.
 func Logout() error {
-	store, err := auth.NewTokenStore()
-	if err != nil {
-		return err
+	return logout(func() (tokenDeleter, error) { return auth.NewTokenStore() }, replydesk.Purge)
+}
+
+// tokenDeleter is the part of *auth.TokenStore that logout needs.
+type tokenDeleter interface {
+	Delete() error
+}
+
+// logout is Logout with its two side effects injected for tests.
+func logout(newStore func() (tokenDeleter, error), purge func() error) error {
+	var tokenErr error
+	if store, err := newStore(); err != nil {
+		tokenErr = fmt.Errorf("opening token store: %w", err)
+	} else if err := store.Delete(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		tokenErr = fmt.Errorf("removing stored tokens: %w", err)
 	}
-	if err := store.Delete(); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	// Reply Desk drafts and state belong to the signed-in account; the next
+	// account must not inherit them (ADR 0002).
+	var purgeErr error
+	if err := purge(); err != nil {
+		purgeErr = fmt.Errorf("removing Reply Desk state: %w", err)
 	}
-	return nil
+	return errors.Join(tokenErr, purgeErr)
 }
