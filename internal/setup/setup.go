@@ -22,7 +22,7 @@ import (
 //go:embed setup.html
 var setupHTML embed.FS
 
-const version = "v0.9.5"
+const version = "v0.10.0"
 
 // Run starts the setup UI on a random localhost port and opens the browser.
 func Run(binaryPath string) error {

@@ -7,22 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-24
+
+### Added
+- **Reply Desk** (`webex-mcp --review`, ADR 0002): finds 1:1 direct messages where the other person has written since your last reply, drafts a reply grounded in what you said earlier in that conversation, and opens a loopback review page. There you edit, regenerate with an instruction, copy, dismiss, snooze, or send each reply. `--dry-run` lists what is waiting without drafting. Drafting runs `claude -p` with no tools and no MCP servers (`--drafter auto|bare|isolated|off`). Nothing is marked read; only an explicit Send posts, after a live re-check for edits, deletes, new messages, and replies made elsewhere. Drafts without a grounded answer use `[[FILL: …]]` placeholders that block sending.
+- `webex.Client`: `ListDirectRooms` with Link-header paging (it follows only next links on the API base URL), `ListMessages` with `beforeMessage`/`parentId`/`mentionedPeople`, `GetMessage`, `Retry-After` handling for 429/423 (waits of up to 30 s are retried in place), and a smaller-page retry after a 504. `Message` now carries `markdown`, `updated`, `mentionedPeople`, `mentionedGroups`, `attachments`, and `isVoiceClip`.
+
+### Fixed
+- `--review` now also shuts down cleanly on SIGTERM, on SIGHUP (Unix), and when its console window is closed (Windows), so the instance lock is released. `--dry-run` no longer reports "No unanswered direct messages" when conversations could not be checked. `.mcp.json` replacement retries a Windows sharing violation.
+- `.mcp.json` is now written through a temp file and a rename, so the result is mode 0600 even when the file already existed with wider permissions. Setup warns when it writes a PAT into a `.mcp.json` that also holds other servers, since such files are often committed.
+- `.gitignore` ignored every path named `webex-mcp`, including new files under `cmd/webex-mcp/`. The binary patterns are now anchored to the repo root.
+- `SendMessage` and `ShareFile` return typed errors: a 404 matches `webex.ErrNotFound`, and a 429 is a `*webex.RateLimitError` whose message reads "webex API rate limited (status 429), retry after Ns". POSTs are never retried.
+
+### Security
+- OAuth token refresh is serialized across processes with a lock file in the config directory. Under the lock, the stored tokens are reloaded, and refresh happens only if they are still stale, so concurrent Claude Code sessions and `--review` no longer race on the same refresh token (F20).
+- After `--logout` or `--switch`, a running MCP server or `--review` used to keep the old session, could re-save it at its next refresh, or could adopt the newly signed-in account's tokens. Stored tokens now carry a session ID, and a process whose session vanished or changed gets `auth.ErrSignedOut` instead. A refresh already in flight re-checks the store before saving. `--logout` and new sign-ins wait for it. A session stored for a different client ID is never overwritten (F27).
+- THREAT_MODEL.md: the stale setup entry point is fixed, and a Reply Desk addendum adds trust boundaries TB7-TB9 and findings F20-F23 and F25-F27.
+
+## [0.9.6] - 2026-11-24
+
 ### Added
 - `send_message` and `reply_to_thread` take an optional `markdown` field, which Webex renders, alongside `text` as the plain-text fallback. Either may be sent alone, and both are length-checked and URL-filtered.
 - `share_file` uploads a local file to a space or thread with an optional `text` or `markdown` message, as `multipart/form-data` like the Webex Go SDK's `CreateWithAttachment`. It was a stub.
 - `docs/adr/0001-local-index-daemon-and-agent-dispatch.md` (Accepted): split into a long-running indexing daemon and the per-session MCP server, with SQLite/FTS5 storage, rules in `agents/*.md` frontmatter, `claude -p` dispatch, and an external, opt-in knowledge layer (notegraph over MCP). The decisions rest on a 6-month backfill spike and an LLM-judged retrieval hit rate.
-- **Reply Desk** (`webex-mcp --review`, ADR 0002): finds 1:1 direct messages where the other person has written since your last reply, drafts a reply grounded in what you said earlier in that conversation, and opens a loopback review page. There you edit, regenerate with an instruction, copy, dismiss, snooze, or send each reply. `--dry-run` lists what is waiting without drafting. Drafting runs `claude -p` with no tools and no MCP servers (`--drafter auto|bare|isolated|off`). Nothing is marked read; only an explicit Send posts, after a live re-check for edits, deletes, new messages, and replies made elsewhere. Drafts without a grounded answer use `[[FILL: …]]` placeholders that block sending.
-- `webex.Client`: `ListDirectRooms` with Link-header paging (it follows only next links on the API base URL), `ListMessages` with `beforeMessage`/`parentId`/`mentionedPeople`, `GetMessage`, `Retry-After` handling for 429/423 (waits of up to 30 s are retried in place), and a smaller-page retry after a 504. `Message` now carries `markdown`, `updated`, `mentionedPeople`, `mentionedGroups`, `attachments`, and `isVoiceClip`.
-- `internal/safetext`: shared text-safety rules (`Sandbox`, `Sanitize`, `Prepare`, `MaxMessageLen`) used by the MCP tools and Reply Desk.
 
 ### Fixed
 - `webex-mcp --setup` with an existing session used to print "Nothing to do" and write no `.mcp.json`. Running it in a new directory left the server unregistered there, and rerunning it never repaired a `.mcp.json` whose binary path had gone stale. It now writes or repairs `./.mcp.json` without opening the browser. The client ID comes from `WEBEX_CLIENT_ID`, then the stored session, then the existing `.mcp.json`. If no client secret is stored, it opens the wizard.
 - The setup wizard overwrote `.mcp.json` whole, dropping any other MCP servers in it. It now replaces only the `webex` entry. It keeps non-auth env vars such as `WEBEX_SHARE_DIRS`, and it refuses to overwrite a file that isn't valid JSON.
 - Started from a directory without `.webex-agents.yml` or `agents/`, the server routed nothing and inlined no playbooks. The shipped routes and playbooks are now built into the binary and used as a fallback; files in the working directory still take precedence. An invalid or unreadable `.webex-agents.yml` still means no routes, not the built-in ones.
 - `--setup` printed an already-expired access token as "valid until <past date>". It now says the token renews automatically.
-- `--review` now also shuts down cleanly on SIGTERM, on SIGHUP (Unix), and when its console window is closed (Windows), so the instance lock is released. `--dry-run` no longer reports "No unanswered direct messages" when conversations could not be checked. `.mcp.json` replacement retries a Windows sharing violation.
-- `.gitignore` ignored every path named `webex-mcp`, including new files under `cmd/webex-mcp/`. The binary patterns are now anchored to the repo root.
-- `SendMessage` and `ShareFile` return typed errors: a 404 matches `webex.ErrNotFound`, and a 429 is a `*webex.RateLimitError` whose message reads "webex API rate limited (status 429), retry after Ns". POSTs are never retried.
 - The setup wizard's detection step panicked when `WEBEX_CLIENT_ID` was shorter than 4 characters, because it sliced the ID to mask it. All credential masking now goes through one helper that handles short values.
 - The setup wizard ignored a failure to register the `wmcp://` handler, so a user could wait out the 5-minute sign-in timeout without being told why. It now logs a warning.
 
@@ -30,12 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OAuth tokens are saved with their client ID (`client_id` in the token store). Sessions from earlier versions pick it up on their next refresh.
 
 ### Security
-- The prompt-injection wrapper did not escape its own closing tag, so a Webex message containing `</external-message>` could end the sandbox early in any tool's output. `safetext.Sandbox` now neutralizes opening and closing wrapper tags, case-insensitive and including whitespace variants (THREAT_MODEL F19).
-- Outbound text now also blocks the `<@all>` broadcast mention (F24).
-- OAuth token refresh is serialized across processes with a lock file in the config directory. Under the lock, the stored tokens are reloaded, and refresh happens only if they are still stale, so concurrent Claude Code sessions and `--review` no longer race on the same refresh token (F20).
-- After `--logout` or `--switch`, a running MCP server or `--review` used to keep the old session, could re-save it at its next refresh, or could adopt the newly signed-in account's tokens. Stored tokens now carry a session ID, and a process whose session vanished or changed gets `auth.ErrSignedOut` instead. A refresh already in flight re-checks the store before saving. `--logout` and new sign-ins wait for it. A session stored for a different client ID is never overwritten (F27).
-- MCP tool output now cleans room titles, display names and similar Webex-controlled labels with `safetext.Label`, and a preview cut mid-tag can no longer leave a partial sandbox tag (F28).
-- THREAT_MODEL.md: the stale setup entry point is fixed, and a Reply Desk addendum adds trust boundaries TB7-TB9 and findings F19-F28.
+- The prompt-injection wrapper did not escape its own closing tag, so a Webex message containing `</external-message>` could end the sandbox early in any tool's output. The new shared `internal/safetext` package's `Sandbox` neutralizes opening and closing wrapper tags (case-insensitive, whitespace variants, and a partial tag left at the end by a cut preview). All tools use it (THREAT_MODEL F19).
+- Room titles, display names, and similar Webex-controlled labels were written into tool output unsandboxed. `safetext.Label` now cleans them (control characters, markup, length) in every tool (F28). `get_users` and `get_user_profile` still return full email addresses by design; every other tool masks them.
+- Outbound text also blocks the `<@all>` broadcast mention (F24). `safetext.Sanitize` and `safetext.Prepare` replace the tools' private sanitizer and length check, with identical behavior otherwise.
 - `share_file` reads only regular files, not symlinks, up to 100 MB, under the working directory, the OS temp directory, or a directory in `WEBEX_SHARE_DIRS`. It refuses a path with a hidden component, such as `.ssh`, and key, credential, token, and `.env` file names, so a Webex message cannot talk the model into uploading a secret. Refusals are audit-logged.
 
 ## [0.9.5] - 2026-10-01
