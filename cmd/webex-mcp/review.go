@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -98,13 +99,21 @@ func handleReview(args []string) {
 	}
 
 	client := webex.NewClient(resolveAuth())
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := reviewContext()
 	err = runReview(ctx, client, opts)
 	stop()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, reviewFailure(err))
 		os.Exit(1)
 	}
+}
+
+// reviewContext is cancelled by any of reviewSignals: Ctrl-C, closing the
+// console or terminal, or SIGTERM. runReview then returns through
+// serveThenClose, so the store is closed and the instance lock released
+// before the process exits.
+func reviewContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), reviewSignals()...)
 }
 
 // reviewFailure is the line printed when --review fails.
@@ -157,10 +166,12 @@ func serveThenClose(ctx context.Context, serve, closeFn func(context.Context) er
 	return errors.Join(serveErr, closeErr)
 }
 
-// reviewDryRun prints the pending bursts without drafting or serving. Rooms
-// that failed are a warning on errOut. It fails only when the list can't be
-// trusted: the scan was rate limited or interrupted (after printing what it
-// found), or nothing is pending and the room listing itself failed.
+// reviewDryRun prints the pending bursts without drafting or serving. When
+// something is pending, rooms that failed are a warning on errOut. It fails
+// when the list can't be trusted: the scan was rate limited or interrupted
+// (after printing what it found), or nothing is pending and any room, or
+// the room listing itself, could not be checked. Nothing pending with some
+// rooms checked prints how many could not be, never an all-clear.
 func reviewDryRun(ctx context.Context, api replydesk.API, lookback time.Duration, out, errOut io.Writer) error {
 	me, err := api.GetMe()
 	if err != nil {
@@ -170,14 +181,15 @@ func reviewDryRun(ctx context.Context, api replydesk.API, lookback time.Duration
 		return errors.New("identifying you (people/me): no person ID returned")
 	}
 	now := time.Now()
-	pending, scanErr := replydesk.Scan(ctx, api, me.ID, lookback, now)
+	counted := &roomCounter{API: api}
+	pending, scanErr := replydesk.Scan(ctx, counted, me.ID, lookback, now)
 	if scanErr == nil {
 		return writeDryRun(out, pending, now)
 	}
 	fatal := dryRunFatal(ctx, scanErr, len(pending))
 	if fatal && len(pending) == 0 {
 		// "No unanswered direct messages." would be a false all-clear.
-		return scanErr
+		return emptyScanError(ctx, scanErr, counted.listed(), out)
 	}
 	if err := writeDryRun(out, pending, now); err != nil {
 		return err
@@ -190,8 +202,9 @@ func reviewDryRun(ctx context.Context, api replydesk.API, lookback time.Duration
 }
 
 // dryRunFatal reports whether a Scan error makes the result untrustworthy:
-// a rate limit or interruption stopped the scan, or nothing is pending and
-// the error is more than failed rooms (the room listing itself failed).
+// a rate limit or interruption stopped the scan, or nothing is pending, so
+// any failed room or room listing would turn the empty list into a false
+// all-clear. With results, failed rooms and a partial listing are a warning.
 func dryRunFatal(ctx context.Context, err error, pending int) bool {
 	if err == nil {
 		return false
@@ -200,7 +213,28 @@ func dryRunFatal(ctx context.Context, err error, pending int) bool {
 	if errors.As(err, &rl) || ctx.Err() != nil {
 		return true
 	}
-	return pending == 0 && !onlyRoomErrors(err)
+	return pending == 0
+}
+
+// emptyScanError is the --dry-run result when nothing is pending and the
+// scan reported scanErr. When the only errors are failed rooms and some of
+// the listed rooms were checked, it tells out how many could not be; it
+// prints nothing otherwise. It always returns an error, so the exit status
+// is non-zero.
+func emptyScanError(ctx context.Context, scanErr error, listed int, out io.Writer) error {
+	var rl *webex.RateLimitError
+	if errors.As(scanErr, &rl) || ctx.Err() != nil || !onlyRoomErrors(scanErr) {
+		return scanErr
+	}
+	failed := len(splitErrors(scanErr))
+	if failed >= listed {
+		return fmt.Errorf("could not check any of your %d direct conversation(s): %w", failed, scanErr)
+	}
+	err := fmt.Errorf("%d of %d direct conversation(s) could not be checked: %w", failed, listed, scanErr)
+	if _, werr := fmt.Fprintf(out, "Could not check %d conversation(s); nothing found in the rest.\n", failed); werr != nil {
+		return errors.Join(err, werr)
+	}
+	return err
 }
 
 // onlyRoomErrors reports whether err consists only of per-room failures.
@@ -208,10 +242,7 @@ func dryRunFatal(ctx context.Context, err error, pending int) bool {
 // room listing is prefixed "listing direct rooms: ". replydesk exposes no
 // typed error for the distinction.
 func onlyRoomErrors(err error) bool {
-	errs := []error{err}
-	if j, ok := err.(interface{ Unwrap() []error }); ok {
-		errs = j.Unwrap()
-	}
+	errs := splitErrors(err)
 	if len(errs) == 0 {
 		return false
 	}
@@ -222,6 +253,37 @@ func onlyRoomErrors(err error) bool {
 	}
 	return true
 }
+
+// splitErrors returns the errors joined in err (errors.Join), or err alone.
+func splitErrors(err error) []error {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		return j.Unwrap()
+	}
+	return []error{err}
+}
+
+// roomCounter wraps a replydesk.API to record how many scannable rooms
+// (those with an ID) the room listing returned, so --dry-run can tell
+// "some rooms failed" from "every room failed".
+type roomCounter struct {
+	replydesk.API
+	n atomic.Int64
+}
+
+func (c *roomCounter) ListDirectRooms(activeSince time.Time, limit int) ([]webex.Space, error) {
+	rooms, err := c.API.ListDirectRooms(activeSince, limit)
+	var n int64
+	for _, r := range rooms {
+		if r.ID != "" {
+			n++
+		}
+	}
+	c.n.Add(n)
+	return rooms, err
+}
+
+// listed is the number of scannable rooms the listing returned.
+func (c *roomCounter) listed() int { return int(c.n.Load()) }
 
 // writeDryRun renders pending bursts for a terminal in a single write.
 // Sender-controlled text (room titles, reasons, message text) goes through

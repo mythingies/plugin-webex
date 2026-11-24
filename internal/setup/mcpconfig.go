@@ -198,11 +198,12 @@ func writeConfigFile(path string, data []byte) (err error) {
 		return fmt.Errorf("restricting %s: %w", mcpConfigFile, err)
 	}
 	// On Windows, 0600 has no effect; strip inherited ACEs so other users on
-	// the machine can't read an embedded PAT. The rename keeps the ACL.
+	// the machine can't read an embedded PAT. The rename keeps the ACL, and
+	// is retried on Windows while a scanner briefly holds the file.
 	if err := auth.RestrictFileAccess(tmp); err != nil {
 		return fmt.Errorf("locking %s ACL: %w", mcpConfigFile, err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := renameWithRetry(configRename, renameRetryable, configRenameTries, configRenameBackoff, tmp, path); err != nil {
 		return fmt.Errorf("replacing %s: %w", mcpConfigFile, err)
 	}
 	return nil

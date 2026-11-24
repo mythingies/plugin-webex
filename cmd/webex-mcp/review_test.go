@@ -168,7 +168,8 @@ func TestTerminalSafe(t *testing.T) {
 type fakeAPI struct {
 	rooms   []webex.Space
 	listErr error
-	msgErr  map[string]error // per room ID
+	msgErr  map[string]error           // per room ID
+	msgs    map[string][]webex.Message // first page per room ID, newest first
 }
 
 func (f *fakeAPI) GetMe() (*webex.Person, error) { return &webex.Person{ID: "me"}, nil }
@@ -181,7 +182,10 @@ func (f *fakeAPI) ListMessages(opts webex.ListMessagesOptions) ([]webex.Message,
 	if err := f.msgErr[opts.RoomID]; err != nil {
 		return nil, err
 	}
-	return nil, nil
+	if opts.BeforeMessage != "" {
+		return nil, nil // one page only
+	}
+	return f.msgs[opts.RoomID], nil
 }
 
 func (f *fakeAPI) GetMessage(string) (*webex.Message, error) { return nil, webex.ErrNotFound }
@@ -190,20 +194,79 @@ func (f *fakeAPI) SendMessage(string, string, string, string, string, string) (*
 	return nil, errors.New("dry run must not send")
 }
 
-func TestReviewDryRun_FailedRoomIsAWarning(t *testing.T) {
+// One failed room of two with nothing pending is not an all-clear: the
+// failed room may hold the unanswered message.
+func TestReviewDryRun_FailedRoomWithNothingPendingIsNotAllClear(t *testing.T) {
 	api := &fakeAPI{
 		rooms:  []webex.Space{{ID: "r1", Type: "direct"}, {ID: "r2", Type: "direct"}},
 		msgErr: map[string]error{"r1": errors.New("HTTP 500")},
 	}
 	var out, errOut bytes.Buffer
-	if err := reviewDryRun(context.Background(), api, 24*time.Hour, &out, &errOut); err != nil {
-		t.Fatalf("one failed room with nothing pending must not be fatal: %v", err)
+	err := reviewDryRun(context.Background(), api, 24*time.Hour, &out, &errOut)
+	if err == nil {
+		t.Fatal("a failed room with nothing pending must exit non-zero")
 	}
-	if !strings.Contains(out.String(), "No unanswered") {
+	if !strings.Contains(err.Error(), "HTTP 500") || !strings.Contains(err.Error(), "1 of 2") {
+		t.Errorf("err = %v", err)
+	}
+	if strings.Contains(out.String(), "No unanswered") {
+		t.Errorf("stdout claims an all-clear: %q", out.String())
+	}
+	if want := "Could not check 1 conversation(s); nothing found in the rest.\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+// Every listed room failing is fatal: nothing was checked at all.
+func TestReviewDryRun_AllRoomsFailedIsFatal(t *testing.T) {
+	api := &fakeAPI{
+		rooms:  []webex.Space{{ID: "r1", Type: "direct"}, {ID: "r2", Type: "direct"}},
+		msgErr: map[string]error{"r1": errors.New("HTTP 500"), "r2": errors.New("HTTP 502")},
+	}
+	var out bytes.Buffer
+	err := reviewDryRun(context.Background(), api, 24*time.Hour, &out, io.Discard)
+	if err == nil {
+		t.Fatal("every room failing must exit non-zero")
+	}
+	if !strings.Contains(err.Error(), "any of your 2") {
+		t.Errorf("err = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("nothing should be printed when no room could be checked: %q", out.String())
+	}
+}
+
+// A failed room alongside results is a warning: the results are printed and
+// the exit status is zero.
+func TestReviewDryRun_FailedRoomWithResultsIsAWarning(t *testing.T) {
+	created := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	api := &fakeAPI{
+		rooms:  []webex.Space{{ID: "r1", Type: "direct"}, {ID: "r2", Type: "direct", Title: "Alice"}},
+		msgErr: map[string]error{"r1": errors.New("HTTP 500")},
+		msgs: map[string][]webex.Message{
+			"r2": {{ID: "m1", RoomID: "r2", PersonID: "alice", PersonEmail: "alice@example.com", Text: "ping", Created: created}},
+		},
+	}
+	var out, errOut bytes.Buffer
+	if err := reviewDryRun(context.Background(), api, 24*time.Hour, &out, &errOut); err != nil {
+		t.Fatalf("a failed room alongside results must not be fatal: %v", err)
+	}
+	if !strings.Contains(out.String(), "1 direct message conversation(s) awaiting your reply") || !strings.Contains(out.String(), "> ping") {
 		t.Errorf("stdout = %q", out.String())
 	}
 	if !strings.Contains(errOut.String(), "warning: some rooms could not be scanned") || !strings.Contains(errOut.String(), "HTTP 500") {
 		t.Errorf("stderr = %q", errOut.String())
+	}
+}
+
+func TestReviewDryRun_NothingPendingIsAllClear(t *testing.T) {
+	api := &fakeAPI{rooms: []webex.Space{{ID: "r1", Type: "direct"}}}
+	var out bytes.Buffer
+	if err := reviewDryRun(context.Background(), api, 24*time.Hour, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No unanswered") {
+		t.Errorf("stdout = %q", out.String())
 	}
 }
 
@@ -237,8 +300,11 @@ func TestReviewDryRun_ListingFailureIsFatal(t *testing.T) {
 func TestDryRunFatal(t *testing.T) {
 	bg := context.Background()
 	roomErrs := errors.Join(errors.New("room a: boom"), errors.New("room b: boom"))
-	if dryRunFatal(bg, roomErrs, 0) {
-		t.Error("per-room errors alone are not fatal")
+	if !dryRunFatal(bg, roomErrs, 0) {
+		t.Error("per-room errors with nothing pending are fatal (no false all-clear)")
+	}
+	if dryRunFatal(bg, roomErrs, 1) {
+		t.Error("per-room errors alongside results are a warning")
 	}
 	if !dryRunFatal(bg, errors.Join(errors.New("listing direct rooms: x"), errors.New("room a: y")), 0) {
 		t.Error("a listing error with nothing pending is fatal")
