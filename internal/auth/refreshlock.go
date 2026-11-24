@@ -11,6 +11,11 @@ package auth
 // usually takes over the token the holder just saved and never calls the
 // endpoint itself.
 //
+// Every other writer of the stored session takes the same lock: deleting it
+// (--logout, --switch), saving a newly authorized session, and migrating
+// tokens.json into the keychain. A refresh re-reads the store just before
+// it saves, so under the lock it never writes an ended session back.
+//
 // The lock is an advisory file created with O_CREATE|O_EXCL, which is
 // atomic on every platform we ship for (including NTFS). It is best-effort
 // by design: if it cannot be taken in time the caller refreshes anyway,
@@ -56,14 +61,14 @@ var (
 func acquireRefreshLock(dir string) (release func(), ok bool) {
 	noop := func() {}
 	if dir == "" {
-		slog.Debug("no directory for refresh lock; refreshing without it")
+		slog.Debug("no directory for refresh lock; continuing without it")
 		return noop, false
 	}
 
 	path := filepath.Join(dir, refreshLockName)
 	owner, err := lockOwnerID()
 	if err != nil {
-		slog.Warn("could not create refresh lock id; refreshing without lock", "error", err)
+		slog.Warn("could not create refresh lock id; continuing without lock", "error", err)
 		return noop, false
 	}
 
@@ -76,7 +81,7 @@ func acquireRefreshLock(dir string) (release func(), ok bool) {
 		if err != nil {
 			// Not "already exists": the directory is missing or not
 			// writable. Waiting will not fix that.
-			slog.Warn("could not create refresh lock; refreshing without it", "error", err)
+			slog.Warn("could not create refresh lock; continuing without it", "error", err)
 			return noop, false
 		}
 
@@ -87,7 +92,7 @@ func acquireRefreshLock(dir string) (release func(), ok bool) {
 		}
 
 		if !time.Now().Before(deadline) {
-			slog.Warn("timed out waiting for refresh lock; refreshing without it",
+			slog.Warn("timed out waiting for refresh lock; continuing without it",
 				"timeout", refreshLockTimeout.String())
 			return noop, false
 		}

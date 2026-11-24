@@ -357,6 +357,9 @@ func TestTokenRefreshTokenSelection(t *testing.T) {
 		memory *StoredTokens
 		stored *StoredTokens // nil: store file absent
 		want   string        // refresh token the endpoint should receive
+		// wantSignedOut: Token fails with ErrSignedOut, nothing is sent
+		// to the endpoint, and the store is left as it was.
+		wantSignedOut bool
 	}{
 		{
 			name:   "stored refresh token is newer",
@@ -389,6 +392,9 @@ func TestTokenRefreshTokenSelection(t *testing.T) {
 			want:   "refresh-mem",
 		},
 		{
+			// Another process signed in with a different OAuth client
+			// (--setup --force). Refreshing ours and saving it would
+			// overwrite that session, so this process signs out instead.
 			name:   "stored tokens belong to another client",
 			memory: staleTokens("refresh-mem"),
 			stored: func() *StoredTokens {
@@ -396,7 +402,7 @@ func TestTokenRefreshTokenSelection(t *testing.T) {
 				s.ClientID = "someone-else"
 				return s
 			}(),
-			want: "refresh-mem",
+			wantSignedOut: true,
 		},
 		{
 			name:   "stored tokens predate client id field",
@@ -425,7 +431,24 @@ func TestTokenRefreshTokenSelection(t *testing.T) {
 				tokenURL:   ep.srv.URL,
 				tokens:     tt.memory,
 			}
-			if _, err := p.Token(); err != nil {
+			tok, err := p.Token()
+			if tt.wantSignedOut {
+				assertSignedOut(t, p, tok, err)
+				if sent := ep.sentRefreshTokens(); len(sent) != 0 {
+					t.Errorf("refresh tokens sent = %q, want none", sent)
+				}
+				saved, err := store.Load()
+				if err != nil {
+					t.Fatalf("loading store: %v", err)
+				}
+				if !sameStoredTokens(saved, tt.stored) {
+					t.Errorf("store changed: got client %q refresh %q, want client %q refresh %q",
+						saved.ClientID, saved.RefreshToken, tt.stored.ClientID, tt.stored.RefreshToken)
+				}
+				assertNoLockFile(t, store)
+				return
+			}
+			if err != nil {
 				t.Fatalf("Token(): %v", err)
 			}
 			sent := ep.sentRefreshTokens()

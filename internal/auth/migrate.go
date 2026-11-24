@@ -23,6 +23,12 @@ func (s *TokenStore) MigrateTokensFromFile() (bool, error) {
 		return false, nil
 	}
 
+	// A file-mode process may be refreshing these tokens right now. Hold
+	// the refresh lock so its save cannot land between our read and the
+	// removal of the file, which would lose the refreshed tokens.
+	release, _ := acquireRefreshLock(s.lockDir())
+	defer release()
+
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

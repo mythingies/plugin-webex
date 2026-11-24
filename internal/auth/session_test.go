@@ -61,6 +61,9 @@ func TestTokenSignedOutAfterSwitch(t *testing.T) {
 		{name: "new session with fresh access token", mine: "sess-a", stored: freshSessionTokens("access-b", "sess-b")},
 		{name: "legacy process sees a new session", mine: "", stored: freshSessionTokens("access-b", "sess-b")},
 		{name: "new process sees a legacy session", mine: "sess-a", stored: freshSessionTokens("access-b", "")},
+		// The client check alone must catch these: the session IDs match.
+		{name: "another client with the same session id", mine: "sess-a", stored: otherClient(sessionTokens("refresh-c", "sess-a"))},
+		{name: "another client, both legacy", mine: "", stored: otherClient(sessionTokens("refresh-c", ""))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

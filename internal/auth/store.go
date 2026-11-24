@@ -64,7 +64,7 @@ func NewTokenStore() (*TokenStore, error) {
 
 	s := &TokenStore{
 		path:       filepath.Join(dir, tokenFileName),
-		useKeyring: keyringAvailable(),
+		useKeyring: tokenKeyringProbe(),
 	}
 	return s, nil
 }
@@ -120,8 +120,15 @@ func (s *TokenStore) Save(tokens *StoredTokens) error {
 	return RestrictFileAccess(s.path)
 }
 
-// Delete removes stored tokens.
+// Delete removes stored tokens. It takes the cross-process refresh lock
+// first, so a logout waits for a refresh in flight in another process (which
+// then sees an intact store and saves) instead of the refresh saving its
+// tokens back after the delete. Like a refresh, it waits at most
+// refreshLockTimeout and then deletes without the lock.
 func (s *TokenStore) Delete() error {
+	release, _ := acquireRefreshLock(s.lockDir())
+	defer release()
+
 	if s.useKeyring {
 		if err := keyring.Delete(keyringService, keyringAcctTok); err != nil {
 			if errors.Is(err, keyring.ErrNotFound) {
@@ -147,6 +154,22 @@ func (s *TokenStore) Path() string {
 func (s *TokenStore) UsingKeyring() bool {
 	return s.useKeyring
 }
+
+// lockDir is the directory for the cross-process refresh lock: the
+// directory of the fallback file, which NewTokenStore creates. It is the
+// same for keychain-backed stores. Empty when the store has no path (then
+// callers go ahead without the lock).
+func (s *TokenStore) lockDir() string {
+	if s.path == "" {
+		return ""
+	}
+	return filepath.Dir(s.path)
+}
+
+// tokenKeyringProbe reports whether the OS keychain is usable for tokens.
+// It is a variable so tests can choose a backend without touching the real
+// keychain.
+var tokenKeyringProbe = keyringAvailable
 
 // keyringAvailable probes the OS keychain by writing and deleting a sentinel
 // value. Returns false on Linux when no Secret Service backend is running.

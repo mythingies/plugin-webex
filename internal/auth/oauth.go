@@ -173,6 +173,9 @@ func (p *OAuthProvider) Token() (string, error) {
 	// Try refresh.
 	if refreshTokenUsable(p.tokens) {
 		if err := p.refresh(); err != nil {
+			if errors.Is(err, ErrSignedOut) {
+				return "", err
+			}
 			return "", fmt.Errorf("token refresh failed: %w", err)
 		}
 		return p.tokens.AccessToken, nil
@@ -185,51 +188,122 @@ func (p *OAuthProvider) Token() (string, error) {
 // tokens when the stored ones are newer: either the stored access token is
 // still fresh, or the stored refresh token is usable (so a refresh uses the
 // newest refresh token, which matters if the endpoint rotated it). The
-// in-memory tokens are kept when the store is unreadable or holds a session
-// for a different OAuth client.
+// in-memory tokens are kept when the store is unreadable.
 //
-// Only a stored session with this provider's session ID is adopted. A
-// different one means another process ran --switch (or --setup --force),
-// and an empty store means it ran --logout. Either way this process is
-// signed out: it drops its tokens, does not refresh or save them back, and
-// gets an error wrapping ErrSignedOut. Legacy sessions with no session ID
-// on either side still adopt each other.
+// Only a stored session with this provider's session ID and OAuth client
+// is adopted. A different one means another process ran --switch (or
+// --setup --force, possibly with another client ID), and an empty store
+// means it ran --logout. Either way this process is signed out: it drops
+// its tokens, does not refresh or save them back, and gets an error
+// wrapping ErrSignedOut. Legacy sessions with no session ID on either side
+// still adopt each other.
 //
 // Callers must hold p.mu and should hold the refresh lock.
 func (p *OAuthProvider) adoptStoredTokens() error {
 	if p.store == nil {
 		return nil
 	}
-	stored, err := p.store.Load()
-	if errors.Is(err, os.ErrNotExist) {
-		if !p.persisted {
-			// Our session never reached the store (its save failed), so
-			// an empty store says nothing about a sign-out.
-			return nil
-		}
-		slog.Warn("stored OAuth tokens were removed by another process; signing out")
-		p.signOut()
-		return fmt.Errorf("stored OAuth session removed: %w", ErrSignedOut)
-	}
+	stored, err := p.loadStoredSession()
 	if err != nil || stored == nil {
-		if err != nil {
-			slog.Warn("could not reload stored OAuth tokens; using in-memory tokens", "error", err)
-		}
-		return nil
-	}
-	if stored.ClientID != "" && p.config.ClientID != "" && stored.ClientID != p.config.ClientID {
-		slog.Debug("stored OAuth tokens belong to a different client; not adopting")
-		return nil
-	}
-	if stored.SessionID != p.sessionID {
-		slog.Warn("stored OAuth tokens belong to a different session; signing out")
-		p.signOut()
-		return fmt.Errorf("stored OAuth session replaced: %w", ErrSignedOut)
+		return err
 	}
 	if accessTokenFresh(stored) || refreshTokenUsable(stored) {
 		p.setSession(stored, true)
 	}
 	return nil
+}
+
+// loadStoredSession reloads the store and checks that it still holds this
+// provider's session. It returns the stored tokens, or nil when the store
+// is unreadable or this session never reached it (the caller carries on
+// with its in-memory tokens). When the stored session was removed or
+// replaced it signs out and returns an error wrapping ErrSignedOut.
+//
+// Callers must hold p.mu and should hold the refresh lock.
+func (p *OAuthProvider) loadStoredSession() (*StoredTokens, error) {
+	stored, err := p.loadStore()
+	if errors.Is(err, os.ErrNotExist) {
+		if !p.persisted {
+			// Our session never reached the store (its save failed), so
+			// an empty store says nothing about a sign-out.
+			return nil, nil
+		}
+		slog.Warn("stored OAuth tokens were removed by another process; signing out")
+		p.signOut()
+		return nil, fmt.Errorf("stored OAuth session removed: %w", ErrSignedOut)
+	}
+	if err != nil || stored == nil {
+		if err != nil {
+			slog.Warn("could not reload stored OAuth tokens; using in-memory tokens", "error", err)
+		}
+		return nil, nil
+	}
+	if p.storedSessionReplaced(stored) {
+		slog.Warn("stored OAuth tokens belong to a different session or client; signing out")
+		p.signOut()
+		return nil, fmt.Errorf("stored OAuth session replaced: %w", ErrSignedOut)
+	}
+	return stored, nil
+}
+
+// loadStore reads the token store. A file-backed store whose file has gone
+// may have been moved rather than deleted: a process that can reach the OS
+// keychain migrates tokens.json into it (MigrateTokensFromFile) and removes
+// the file. So when the file is missing and a keychain is reachable now,
+// tokens stored there for this same session are used, and this provider's
+// store switches to the keychain. Anything else still reports
+// os.ErrNotExist.
+//
+// Callers must hold p.mu.
+func (p *OAuthProvider) loadStore() (*StoredTokens, error) {
+	stored, err := p.store.Load()
+	if !errors.Is(err, os.ErrNotExist) || p.store.useKeyring || !p.persisted {
+		return stored, err
+	}
+	if !tokenKeyringProbe() {
+		return nil, err
+	}
+	kc := &TokenStore{path: p.store.path, useKeyring: true}
+	moved, kerr := kc.Load()
+	if kerr != nil || moved == nil || !p.isMigratedSession(moved) {
+		return nil, err
+	}
+	slog.Info("stored OAuth tokens were moved to the OS keychain by another process; using the keychain")
+	// Replace the store rather than mutate it: the old value may be shared.
+	p.store = kc
+	return moved, nil
+}
+
+// isMigratedSession reports whether keychain tokens kc are this provider's
+// session, copied there from the fallback file. A session ID is random, so
+// a match on it is enough. Legacy sessions have none, and an unrelated
+// legacy entry may be sitting in the keychain, so they must also carry the
+// refresh or access token this process holds, as a byte-for-byte copy of
+// the file would. Callers must hold p.mu.
+func (p *OAuthProvider) isMigratedSession(kc *StoredTokens) bool {
+	if p.storedSessionReplaced(kc) {
+		return false
+	}
+	if p.sessionID != "" {
+		return true
+	}
+	if p.tokens == nil {
+		return false
+	}
+	return (kc.RefreshToken != "" && kc.RefreshToken == p.tokens.RefreshToken) ||
+		(kc.AccessToken != "" && kc.AccessToken == p.tokens.AccessToken)
+}
+
+// storedSessionReplaced reports whether stored is not this provider's
+// session: it has a different session ID, or it was issued to a different
+// OAuth client. Tokens saved before client IDs were recorded (empty
+// ClientID) are judged by session ID alone. Callers must hold p.mu.
+func (p *OAuthProvider) storedSessionReplaced(stored *StoredTokens) bool {
+	if stored.ClientID != "" && stored.ClientID != p.config.ClientID &&
+		(p.config.ClientID != "" || stored.SessionID != "") {
+		return true
+	}
+	return stored.SessionID != p.sessionID
 }
 
 // setSession makes t the in-memory session. persisted reports whether t is
@@ -254,10 +328,10 @@ func (p *OAuthProvider) signOut() {
 // directory of the token store's fallback file, which NewTokenStore creates.
 // Empty when the store has no path (then the refresh runs unlocked).
 func (p *OAuthProvider) refreshLockDir() string {
-	if p.store == nil || p.store.path == "" {
+	if p.store == nil {
 		return ""
 	}
-	return filepath.Dir(p.store.path)
+	return p.store.lockDir()
 }
 
 // accessTokenFresh reports whether t's access token is valid for longer than
@@ -475,9 +549,24 @@ func (p *OAuthProvider) exchangeCode(code, redirectURI, codeVerifier string) err
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.doTokenRequest(data, sessionID)
+	tokens, err := p.doTokenRequest(data, sessionID)
+	if err != nil {
+		return err
+	}
+
+	// The new session replaces whatever is stored, on purpose. Save it
+	// under the refresh lock so it cannot land between another process's
+	// pre-save check of the old session and that process's save, which
+	// would put the old session back over this one.
+	release, _ := acquireRefreshLock(p.refreshLockDir())
+	defer release()
+	p.saveSession(tokens)
+	return nil
 }
 
+// refresh exchanges the in-memory refresh token. Callers must hold p.mu and
+// should hold the refresh lock, which keeps other up-to-date processes from
+// changing the store between the check below and the save.
 func (p *OAuthProvider) refresh() error {
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
@@ -486,18 +575,45 @@ func (p *OAuthProvider) refresh() error {
 	data.Set("refresh_token", p.tokens.RefreshToken)
 
 	// A refresh continues the current session, so it keeps its ID.
-	if err := p.doTokenRequest(data, p.sessionID); err != nil {
+	tokens, err := p.doTokenRequest(data, p.sessionID)
+	if err != nil {
 		return err
 	}
+
+	// The request takes time. If another process signed out or stored a
+	// different session meanwhile (--logout, --switch, --setup --force),
+	// the refreshed tokens belong to a session the user ended: drop them
+	// rather than save them over the store.
+	if p.store != nil {
+		if _, err := p.loadStoredSession(); err != nil {
+			return err
+		}
+	}
+	p.saveSession(tokens)
 
 	slog.Info("OAuth token refreshed successfully")
 	return nil
 }
 
-// doTokenRequest posts data to the token endpoint and, on success, makes the
-// returned tokens the in-memory session sessionID and saves them. Callers
-// must hold p.mu.
-func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) error {
+// saveSession saves tokens to the store and makes them the in-memory
+// session. A failed save is logged and the session kept in memory only.
+// Callers must hold p.mu.
+func (p *OAuthProvider) saveSession(tokens *StoredTokens) {
+	persisted := false
+	if p.store != nil {
+		if err := p.store.Save(tokens); err != nil {
+			slog.Warn("failed to persist tokens", "error", err)
+		} else {
+			persisted = true
+		}
+	}
+	p.setSession(tokens, persisted)
+}
+
+// doTokenRequest posts data to the token endpoint and returns the issued
+// tokens, labelled with sessionID. It neither saves them nor changes the
+// in-memory session. Callers must hold p.mu.
+func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) (*StoredTokens, error) {
 	client := p.httpClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -509,13 +625,13 @@ func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) error 
 
 	resp, err := client.PostForm(endpoint, data)
 	if err != nil {
-		return fmt.Errorf("token request: %w", err)
+		return nil, fmt.Errorf("token request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("reading token response: %w", err)
+		return nil, fmt.Errorf("reading token response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -530,13 +646,13 @@ func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) error 
 		_ = json.Unmarshal(body, &errResp)
 		switch {
 		case errResp.ErrorDescription != "":
-			return fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.ErrorDescription)
+			return nil, fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.ErrorDescription)
 		case errResp.Message != "":
-			return fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.Message)
+			return nil, fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.Message)
 		case errResp.Error != "":
-			return fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.Error)
+			return nil, fmt.Errorf("OAuth token exchange failed (status %d): %s", resp.StatusCode, errResp.Error)
 		default:
-			return fmt.Errorf("OAuth token exchange failed (status %d)", resp.StatusCode)
+			return nil, fmt.Errorf("OAuth token exchange failed (status %d)", resp.StatusCode)
 		}
 	}
 
@@ -547,14 +663,14 @@ func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) error 
 		RefreshTokenExpiresIn int64  `json:"refresh_token_expires_in"`
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return fmt.Errorf("parsing token response: %w", err)
+		return nil, fmt.Errorf("parsing token response: %w", err)
 	}
 
 	if tokenResp.AccessToken == "" {
-		return fmt.Errorf("token response missing access_token")
+		return nil, fmt.Errorf("token response missing access_token")
 	}
 	if tokenResp.ExpiresIn <= 0 {
-		return fmt.Errorf("token response has invalid expires_in: %d", tokenResp.ExpiresIn)
+		return nil, fmt.Errorf("token response has invalid expires_in: %d", tokenResp.ExpiresIn)
 	}
 
 	now := time.Now()
@@ -566,18 +682,7 @@ func (p *OAuthProvider) doTokenRequest(data url.Values, sessionID string) error 
 		ClientID:              p.config.ClientID,
 		SessionID:             sessionID,
 	}
-
-	persisted := false
-	if p.store != nil {
-		if err := p.store.Save(tokens); err != nil {
-			slog.Warn("failed to persist tokens", "error", err)
-		} else {
-			persisted = true
-		}
-	}
-	p.setSession(tokens, persisted)
-
-	return nil
+	return tokens, nil
 }
 
 // newSessionID returns a random identifier for a new OAuth authorization.
