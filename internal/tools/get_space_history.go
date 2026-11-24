@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -41,7 +42,7 @@ func registerGetSpaceHistory(s *mcpserver.MCPServer, client *webex.Client) {
 			if msg.ParentID != "" {
 				thread = fmt.Sprintf(" [thread: %s]", msg.ParentID)
 			}
-			text += fmt.Sprintf("- **%s** (%s)%s: %s\n", maskEmail(msg.PersonEmail), msg.Created, thread, sandboxText(msg.Text))
+			text += fmt.Sprintf("- **%s** (%s)%s: %s\n", maskEmail(msg.PersonEmail), msg.Created, thread, safetext.Sandbox(msg.Text))
 		}
 		if text == "" {
 			text = "No messages found in this space."

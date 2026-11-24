@@ -2,7 +2,6 @@ package tools
 
 import (
 	"log/slog"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +15,6 @@ import (
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
-// maxMessageLen is the maximum text length for outbound messages.
-const maxMessageLen = 7439 // Webex API limit
-
 // maxCardJSONLen is the maximum card JSON size.
 const maxCardJSONLen = 28000 // Webex API limit for attachment bodies
 
@@ -27,13 +23,6 @@ const maxMentionsPerMessage = 50
 
 // toolRateInterval is the minimum interval between drain-type tool calls.
 const toolRateInterval = 2 * time.Second
-
-// sandboxText wraps external message content so the LLM treats it as data,
-// not as instructions. This is a defence-in-depth measure against prompt
-// injection via Webex messages.
-func sandboxText(text string) string {
-	return "<external-message>" + text + "</external-message>"
-}
 
 // clampInt clamps a value between min and max bounds.
 func clampInt(val, min, max int) int {
@@ -66,32 +55,6 @@ func maskEmail(email string) string {
 func auditLog(tool, action string, attrs ...any) {
 	args := append([]any{"tool", tool, "action", action}, attrs...)
 	slog.Info("audit", args...)
-}
-
-// allowedOutboundProtocols lists URL schemes safe for outbound messages.
-var allowedOutboundProtocols = map[string]bool{
-	"http":   true,
-	"https":  true,
-	"mailto": true,
-}
-
-// outboundSchemeRe matches a URI scheme followed by a non-empty body, anywhere
-// in the text (including inside Markdown link targets). A trailing colon with
-// nothing after it ("Note:") is not a URI, and single-letter schemes are left
-// alone so Windows drive paths survive.
-var outboundSchemeRe = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]+:\S+`)
-
-// sanitizeOutboundText validates outbound message text.
-// Replaces URLs with disallowed protocols (e.g., javascript:, data:, wmcp://)
-// in place, leaving all other text, including whitespace, untouched.
-func sanitizeOutboundText(text string) string {
-	return outboundSchemeRe.ReplaceAllStringFunc(text, func(m string) string {
-		scheme := m[:strings.IndexByte(m, ':')]
-		if allowedOutboundProtocols[strings.ToLower(scheme)] {
-			return m
-		}
-		return "[blocked-url]"
-	})
 }
 
 // toolRateLimiter provides per-tool rate limiting for drain operations.

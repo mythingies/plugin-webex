@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/triage"
 )
 
@@ -32,8 +33,8 @@ func registerGetPending(s *mcpserver.MCPServer, tri *triage.Store) {
 		text := fmt.Sprintf("%d item(s) still to process:\n\n", len(items))
 		for _, it := range items {
 			text += fmt.Sprintf("- `%s` [%s] **%s** in **%s** (%s): %s\n",
-				it.ID, it.Priority, maskEmail(it.PersonEmail), it.RoomTitle,
-				it.Created.Format("Jan 2 15:04"), sandboxText(it.Text))
+				it.ID, it.Priority, maskEmail(it.PersonEmail), safetext.Label(it.RoomTitle),
+				it.Created.Format("Jan 2 15:04"), safetext.Sandbox(it.Text))
 		}
 		text += "\nMark items done with mark_processed once you've handled them."
 		return mcp.NewToolResultText(text), nil

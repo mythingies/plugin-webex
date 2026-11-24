@@ -88,12 +88,13 @@ Read-side semantics matter: `get_notifications`, `get_priority_inbox`, `get_ment
 
 `get_notifications`, `get_priority_inbox`, and `get_mentions` (not `get_pending`) call `renderPlaybooks()` to inline `agents/<agent>.md` for each distinct routed agent into the tool result. Paths resolve **relative to the process CWD** (`playbookDir = "agents"`). Only when the file doesn't exist there does it fall back to the copy embedded from the repo's `agents/` (`pluginwebex.Playbooks`; tests swap `builtinPlaybooks`). Playbooks are capped at 4 KB each, cached, and silently skipped if missing from both. `TestBuiltinConfig` requires every built-in route's agent to have an embedded playbook. Agent names are validated against `[A-Za-z0-9_-]`. That allowlist is intentionally duplicated from `router/config.go` so the tools package does not import router. Keep the two in sync.
 
-### Security invariants in `internal/tools/tools.go`
+### Security invariants (`internal/safetext`, `internal/tools/tools.go`)
 
 These come from the MAESTRO threat model (`THREAT_MODEL.md`). New tools must follow them:
-- Wrap any Webex-sourced text in `sandboxText()` (`<external-message>…</external-message>`) as a prompt-injection guard.
-- Mask emails in output with `maskEmail()`.
-- Run outbound text and markdown through `sanitizeOutboundText()`, which only allows http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`). It replaces any other `scheme:` match in place, including one embedded in a Markdown link, and must leave whitespace and newlines alone; it used to collapse them, flattening multi-line messages. Tests: `internal/tools/tools_test.go`. Enforce `maxMessageLen` (7439, checked on the raw input) and `maxCardJSONLen` (28000).
+- Wrap any Webex-sourced text in `safetext.Sandbox()` (`<external-message>…</external-message>`) as a prompt-injection guard. It neutralizes wrapper tags inside the text, including a partial tag left at the end by truncation (F19).
+- Clean Webex-controlled one-line labels (room titles, display names) with `safetext.Label()` (F28).
+- Mask emails in output with `maskEmail()`. The exceptions are `get_users` and `get_user_profile`, which return full addresses on purpose because looking people up is their job (`people.go`, asserted in `labels_test.go`).
+- Run outbound text and markdown through `safetext.Prepare` / `safetext.Sanitize`. These allow only http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`), replace any other `scheme:` match in place (including one inside a Markdown link, and `<@personEmail:…>` mentions), turn `<@all>` into `[blocked-mention]`, and leave whitespace and newlines alone. Tests: `internal/safetext/`. Enforce `safetext.MaxMessageLen` (7439 bytes, checked on the raw input) and `maxCardJSONLen` (28000).
 - Local file reads that a Webex message could steer go through a root-restricted check like `readShareable()` in `share_file.go`: regular files only (no symlinks), under CWD, the OS temp dir, or `WEBEX_SHARE_DIRS`, refusing hidden path components and key/credential/`.env` names.
 - Call `auditLog()` for tool actions; drain-type tools are rate-limited (`toolRateInterval`).
 - Tokens must never be logged. stdout is the MCP channel, so all logging goes to stderr via `slog`.

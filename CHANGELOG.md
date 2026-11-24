@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-11-24
+
 ### Added
 - `send_message` and `reply_to_thread` take an optional `markdown` field, which Webex renders, alongside `text` as the plain-text fallback. Either may be sent alone, and both are length-checked and URL-filtered.
 - `share_file` uploads a local file to a space or thread with an optional `text` or `markdown` message, as `multipart/form-data` like the Webex Go SDK's `CreateWithAttachment`. It was a stub.
@@ -24,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OAuth tokens are saved with their client ID (`client_id` in the token store). Sessions from earlier versions pick it up on their next refresh.
 
 ### Security
+- The prompt-injection wrapper did not escape its own closing tag, so a Webex message containing `</external-message>` could end the sandbox early in any tool's output. The new shared `internal/safetext` package's `Sandbox` neutralizes opening and closing wrapper tags (case-insensitive, whitespace variants, and a partial tag left at the end by a cut preview). All tools use it (THREAT_MODEL F19).
+- Room titles, display names, and similar Webex-controlled labels were written into tool output unsandboxed. `safetext.Label` now cleans them (control characters, markup, length) in every tool (F28). `get_users` and `get_user_profile` still return full email addresses by design; every other tool masks them.
+- Outbound text also blocks the `<@all>` broadcast mention (F24). `safetext.Sanitize` and `safetext.Prepare` replace the tools' private sanitizer and length check, with identical behavior otherwise.
 - `share_file` reads only regular files, not symlinks, up to 100 MB, under the working directory, the OS temp directory, or a directory in `WEBEX_SHARE_DIRS`. It refuses a path with a hidden component, such as `.ssh`, and key, credential, token, and `.env` file names, so a Webex message cannot talk the model into uploading a secret. Refusals are audit-logged.
 
 ## [0.9.5] - 2026-10-01
