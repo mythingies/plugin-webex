@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -28,7 +29,7 @@ func registerListSpaces(s *mcpserver.MCPServer, client *webex.Client) {
 
 		var text string
 		for _, sp := range spaces {
-			text += fmt.Sprintf("- **%s** (type: %s, id: %s, last active: %s)\n", sp.Title, sp.Type, sp.ID, sp.LastActivity)
+			text += fmt.Sprintf("- **%s** (type: %s, id: %s, last active: %s)\n", safetext.Label(sp.Title), sp.Type, sp.ID, sp.LastActivity)
 		}
 		if text == "" {
 			text = "No spaces found."

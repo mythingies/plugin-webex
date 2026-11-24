@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -22,20 +23,16 @@ func messageOptions(what string) []mcp.ToolOption {
 	}
 }
 
-// messageBody reads, checks, and sanitizes text and markdown. A non-nil result is the
-// error to return to the caller.
+// messageBody reads text and markdown from the request and runs them through
+// safetext.Prepare, which checks lengths on the raw input and sanitizes both.
+// A non-nil result is the error to return to the caller; its text is the
+// Prepare error ("text or markdown is required" or "message too long (...)").
 func messageBody(req mcp.CallToolRequest, required bool) (text, markdown string, errResult *mcp.CallToolResult) {
-	text, markdown = req.GetString("text", ""), req.GetString("markdown", "")
-	if required && text == "" && markdown == "" {
-		return "", "", mcp.NewToolResultError("text or markdown is required")
+	text, markdown, err := safetext.Prepare(req.GetString("text", ""), req.GetString("markdown", ""), required)
+	if err != nil {
+		return "", "", mcp.NewToolResultError(err.Error())
 	}
-	for _, s := range []string{text, markdown} {
-		if len(s) > maxMessageLen {
-			return "", "", mcp.NewToolResultError(fmt.Sprintf("message too long (%d chars, max %d)", len(s), maxMessageLen))
-		}
-	}
-	// Strip dangerous URL protocols.
-	return sanitizeOutboundText(text), sanitizeOutboundText(markdown), nil
+	return text, markdown, nil
 }
 
 func registerSendMessage(s *mcpserver.MCPServer, client *webex.Client) {

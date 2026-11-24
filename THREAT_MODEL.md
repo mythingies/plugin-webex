@@ -330,3 +330,11 @@ After remediation, the residual risk profile is:
 - F1: Migrate token storage to OS keychain (macOS Keychain, Windows Credential Manager, Linux libsecret)
 - F13: Add GPG release signing and SLSA build provenance attestation
 - F18: Update `mark3labs/mcp-go` when `buger/jsonparser` fix propagates
+
+## Addendum 2026-11-24: sandbox and label hardening
+
+| # | Finding | Severity | Status | Remediation |
+|---|---------|----------|--------|-------------|
+| F19 | `sandboxText()` did not escape its own wrapper, so REST-sourced text containing `</external-message>` could close the sandbox early | High | **Remediated** | `safetext.Sandbox` neutralizes opening and closing wrapper tags case-insensitively, with whitespace variants, and a partial tag at the end of truncated text; all tools use it. Regression tests in `internal/safetext`. |
+| F24 | Outbound `<@all>` broadcast mention not blocked by the scheme filter | Low | **Remediated** | `safetext.Sanitize` replaces `<@all>` with `[blocked-mention]`. `<@personEmail:…>` / `<@personId:…>` were already neutralized by the scheme rule. |
+| F28 | Webex-controlled labels (room titles, display names) reached the LLM outside the sandbox in MCP tool output | Low | **Remediated** | `safetext.Label` cleans one-line labels (control characters, markup, length) in every tool. |

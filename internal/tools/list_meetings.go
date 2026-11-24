@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -50,9 +51,10 @@ func registerListMeetings(s *mcpserver.MCPServer, client *webex.Client) {
 		text := fmt.Sprintf("%d meeting(s):\n\n", len(meetings))
 		for _, m := range meetings {
 			text += fmt.Sprintf("- **%s** (%s)\n  Time: %s → %s\n  State: %s | Host: %s\n  Meeting #: %s\n",
-				m.Title, m.MeetingType, m.Start, m.End, m.State, m.HostDisplayName, m.MeetingNumber)
+				safetext.Label(m.Title), m.MeetingType, m.Start, m.End, m.State, safetext.Label(m.HostDisplayName), m.MeetingNumber)
 			if m.Agenda != "" {
-				text += fmt.Sprintf("  Agenda: %s\n", m.Agenda)
+				// The agenda is free text written by the organizer.
+				text += fmt.Sprintf("  Agenda: %s\n", safetext.Sandbox(m.Agenda))
 			}
 			if m.WebLink != "" {
 				text += fmt.Sprintf("  Link: %s\n", m.WebLink)

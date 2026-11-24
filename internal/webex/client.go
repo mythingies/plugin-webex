@@ -17,7 +17,7 @@ import (
 // This prevents a compromised DNS from steering the token to non-API paths.
 var allowedRedirectPathPrefixes = []string{"/v1/"}
 
-const baseURL = "https://webexapis.com/v1"
+const defaultBaseURL = "https://webexapis.com/v1"
 
 // maxResponseSize limits API response bodies to 50MB to prevent OOM.
 const maxResponseSize = 50 * 1024 * 1024
@@ -32,6 +32,7 @@ type TokenProvider interface {
 type Client struct {
 	tokenProvider TokenProvider
 	httpClient    *http.Client
+	baseURL       string // defaultBaseURL, or a test server's URL
 }
 
 // NewClient creates a new Webex API client with security-hardened defaults.
@@ -42,6 +43,7 @@ func NewClient(provider TokenProvider) *Client {
 
 	return &Client{
 		tokenProvider: provider,
+		baseURL:       defaultBaseURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -233,7 +235,7 @@ func readLimitedBody(body io.Reader) ([]byte, error) {
 
 // get performs an authenticated GET request.
 func (c *Client) get(path string, params url.Values, out interface{}) error {
-	u := baseURL + path
+	u := c.baseURL + path
 	if params != nil {
 		u += "?" + params.Encode()
 	}
@@ -249,7 +251,7 @@ func (c *Client) get(path string, params url.Values, out interface{}) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- the URL is c.baseURL plus an API path
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
@@ -342,7 +344,7 @@ func (c *Client) ShareFile(roomID, parentID, name string, data []byte, text, mar
 	if err != nil {
 		return nil, fmt.Errorf("getting access token: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/messages", body)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/messages", body)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -351,7 +353,7 @@ func (c *Client) ShareFile(roomID, parentID, name string, data []byte, text, mar
 
 	hc := *c.httpClient
 	hc.Timeout = uploadTimeout
-	resp, err := hc.Do(req)
+	resp, err := hc.Do(req) // #nosec G704 -- the URL is c.baseURL plus a constant path
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
@@ -545,7 +547,7 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	params := url.Values{}
 	params.Set("format", format)
 
-	u := baseURL + "/meetingTranscripts/" + url.PathEscape(transcriptID) + "/download?" + params.Encode()
+	u := c.baseURL + "/meetingTranscripts/" + url.PathEscape(transcriptID) + "/download?" + params.Encode()
 
 	token, err := c.tokenProvider.Token()
 	if err != nil {
@@ -558,7 +560,7 @@ func (c *Client) DownloadTranscript(transcriptID, format string) (string, error)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- the URL is c.baseURL plus an API path
 	if err != nil {
 		return "", fmt.Errorf("executing request: %w", err)
 	}
@@ -592,14 +594,14 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 		return fmt.Errorf("getting access token: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(jsonBody))
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(jsonBody))
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- the URL is c.baseURL plus an API path
 	if err != nil {
 		return fmt.Errorf("executing request: %w", err)
 	}
@@ -607,7 +609,7 @@ func (c *Client) post(path string, body interface{}, out interface{}) error {
 }
 
 // decode closes resp and decodes a 200 or 201 response into out. Each caller runs Do
-// itself on a URL built from baseURL, so the request target stays visibly constant.
+// itself on a URL built from c.baseURL, so the request target stays visibly constant.
 func decode(resp *http.Response, out interface{}) error {
 	defer func() { _ = resp.Body.Close() }()
 
@@ -621,4 +623,12 @@ func decode(resp *http.Response, out interface{}) error {
 	}
 
 	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseSize)).Decode(out)
+}
+
+// NewClientWithBaseURL is NewClient against a different API base URL, for
+// tests that point the client at an httptest server.
+func NewClientWithBaseURL(provider TokenProvider, base string) *Client {
+	c := NewClient(provider)
+	c.baseURL = strings.TrimRight(base, "/")
+	return c
 }

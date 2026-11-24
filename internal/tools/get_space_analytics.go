@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
+	"github.com/mythingies/plugin-webex/internal/safetext"
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
@@ -35,11 +36,17 @@ func registerGetSpaceAnalytics(s *mcpserver.MCPServer, client *webex.Client) {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get analytics: %v", err)), nil
 		}
 
-		text := fmt.Sprintf("**%s** — %d day analytics\n\n", analytics.RoomTitle, analytics.DaysBack)
+		text := fmt.Sprintf("**%s** — %d day analytics\n\n", safetext.Label(analytics.RoomTitle), analytics.DaysBack)
 		text += fmt.Sprintf("- Messages: %d\n", analytics.MessageCount)
 		text += fmt.Sprintf("- Active members: %d / %d total\n", analytics.ActiveMembers, analytics.TotalMembers)
 		text += fmt.Sprintf("- Peak hour: %02d:00\n", analytics.PeakHour)
-		text += fmt.Sprintf("- Most active: %s\n", analytics.MostActivePerson)
+		// MostActivePerson is an email address, so it is masked like every
+		// other sender; it is empty when the window has no messages.
+		mostActive := "none"
+		if analytics.MostActivePerson != "" {
+			mostActive = maskEmail(analytics.MostActivePerson)
+		}
+		text += fmt.Sprintf("- Most active: %s\n", mostActive)
 
 		return mcp.NewToolResultText(text), nil
 	})
