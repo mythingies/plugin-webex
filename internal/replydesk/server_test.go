@@ -43,6 +43,14 @@ type fakeBackend struct {
 	sendDelay  time.Duration // how long Send takes, e.g. re-check GETs waiting on Retry-After
 	dismissErr *APIError
 	snoozeErr  *APIError
+	// signedOut is what SignedOut returns.
+	signedOut bool
+}
+
+func (f *fakeBackend) SignedOut() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.signedOut
 }
 
 type snoozeCall struct {
@@ -1010,6 +1018,79 @@ func TestScanRoute(t *testing.T) {
 	}
 }
 
+// R3: once the backend is signed out, GET /api/items and POST /api/scan
+// answer 409 signed_out (so the page locks) and the backend is not asked
+// for items or a scan.
+func TestItemsAndScanRefusedWhenSignedOut(t *testing.T) {
+	apiErr := signedOutErr()
+	b := &fakeBackend{items: []ItemView{{RoomID: "r1", Title: "Ana"}}}
+	h := startHarness(t, b, harnessOpts{})
+	h.login()
+	// The startup scan runs before the sign-out.
+	waitFor(t, func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return b.rescans == 1
+	})
+	b.mu.Lock()
+	b.signedOut = true
+	startup := b.rescans
+	b.mu.Unlock()
+
+	for _, q := range []string{"/api/items", "/api/items?all=1"} {
+		resp, body := h.get(q)
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("GET %s = %d %s, want 409", q, resp.StatusCode, body)
+		}
+		if e := decodeAPIError(t, body); e != *apiErr {
+			t.Fatalf("GET %s error %+v, want %+v", q, e, *apiErr)
+		}
+	}
+	resp, body := h.post("/api/scan", `{}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("POST /api/scan = %d %s, want 409", resp.StatusCode, body)
+	}
+	if e := decodeAPIError(t, body); e != *apiErr {
+		t.Fatalf("scan error %+v, want %+v", e, *apiErr)
+	}
+	// Status still answers, so the page can show why.
+	if resp, _ := h.get("/api/status"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/status = %d", resp.StatusCode)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.itemsCalls) != 0 || b.rescans != startup {
+		t.Fatalf("backend asked for items %d times and %d scans after the sign-out", len(b.itemsCalls), b.rescans-startup)
+	}
+}
+
+// app.js locks the page on the codes that end a session, from any endpoint
+// (its fetch wrapper), with the same text the status bar shows.
+func TestAppJSLocksOnUnavailableCodes(t *testing.T) {
+	js, err := fs.ReadFile(webFS, "web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(js)
+	start := strings.Index(src, "async function api(")
+	end := strings.Index(src, "async function sha256Hex(")
+	if start < 0 || end < start {
+		t.Fatal("app.js fetch wrapper not found")
+	}
+	wrapper := src[start:end]
+	if !strings.Contains(wrapper, "lock(PAGE_LOCK_CODES[err.code])") {
+		t.Fatal("app.js fetch wrapper does not lock on PAGE_LOCK_CODES")
+	}
+	for code, constName := range map[string]string{CodeSignedOut: "SIGNED_OUT", CodeLockLost: "LOCK_LOST"} {
+		if !strings.Contains(src, code+": "+constName) {
+			t.Errorf("PAGE_LOCK_CODES lacks %s", code)
+		}
+	}
+	if !strings.Contains(src, "const LOCK_LOST = '"+msgLockLost+"'") {
+		t.Error("app.js LOCK_LOST text differs from the status message")
+	}
+}
+
 func TestDraftRoute(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1096,6 +1177,7 @@ func TestSendRoute(t *testing.T) {
 		{name: "bad status becomes 500", body: string(reqJSON), status: 200, apiErr: &APIError{Code: "weird"}, want: 500, wantCall: true},
 		{name: "zero status becomes 500", body: string(reqJSON), status: 0, apiErr: &APIError{Code: "weird"}, want: 500, wantCall: true},
 		{name: "signed out is 409", body: string(reqJSON), status: 400, apiErr: &APIError{Code: CodeSignedOut, Detail: "logged out"}, want: 409, wantCall: true},
+		{name: "lock lost is 409", body: string(reqJSON), status: 500, apiErr: &APIError{Code: CodeLockLost, Detail: msgLockLost}, want: 409, wantCall: true},
 		{name: "busy is 409", body: string(reqJSON), status: 500, apiErr: &APIError{Code: CodeBusy}, want: 409, wantCall: true},
 		{name: "drafter off is 400", body: string(reqJSON), status: 0, apiErr: &APIError{Code: CodeDrafterOff}, want: 400, wantCall: true},
 		{name: "missing room", body: `{"text":"hi"}`, want: 400},

@@ -597,7 +597,22 @@ func (s *reviewServer) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.b.Status())
 }
 
+// refuseSignedOut answers 409 signed_out when --logout/--switch ran while
+// this process was open, so the page locks and the signed-out account's
+// DMs are neither listed nor rescanned. It returns true when it wrote the
+// response.
+func (s *reviewServer) refuseSignedOut(w http.ResponseWriter) bool {
+	if !s.b.SignedOut() {
+		return false
+	}
+	writeJSON(w, http.StatusConflict, signedOutErr())
+	return true
+}
+
 func (s *reviewServer) handleItems(w http.ResponseWriter, r *http.Request) {
+	if s.refuseSignedOut(w) {
+		return
+	}
 	items := s.b.Items(r.URL.Query().Get("all") == "1")
 	if items == nil {
 		items = []ItemView{}
@@ -613,6 +628,9 @@ var okBody = struct {
 
 func (s *reviewServer) handleScan(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &struct{}{}, true) {
+		return
+	}
+	if s.refuseSignedOut(w) {
 		return
 	}
 	s.b.Rescan(context.Background())
@@ -736,6 +754,7 @@ var fixedErrStatus = map[string]int{
 	CodeBusy:       http.StatusConflict,
 	CodeDrafterOff: http.StatusBadRequest,
 	CodeSignedOut:  http.StatusConflict,
+	CodeLockLost:   http.StatusConflict,
 }
 
 // backendErrStatus maps a Backend error from Draft, Dismiss, or Snooze to an

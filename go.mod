@@ -6,6 +6,7 @@ require (
 	github.com/3rg0n/webex-message-handler/go v0.6.12
 	github.com/mark3labs/mcp-go v0.55.0
 	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/sys v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -20,6 +21,5 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 )

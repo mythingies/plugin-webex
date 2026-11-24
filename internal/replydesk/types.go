@@ -130,6 +130,10 @@ const (
 // tests use a fake.
 type Backend interface {
 	Status() StatusView
+	// SignedOut reports whether --logout or --switch ran while this process
+	// was open. The server then refuses items and scans with CodeSignedOut:
+	// the inbox is the signed-out account's.
+	SignedOut() bool
 	// Items lists inbox items; all=false hides sent and dismissed rooms.
 	Items(all bool) []ItemView
 	// Rescan starts a scan in the background and returns immediately.
@@ -313,4 +317,5 @@ const (
 	CodeBusy           = "busy"        // 409: a draft is already running and the request carries an instruction
 	CodeDrafterOff     = "drafter_off" // 400: drafting is unavailable
 	CodeSignedOut      = "signed_out"  // 409: --logout/--switch ran while this process was open
+	CodeLockLost       = "lock_lost"   // 409: another --review took over the store; this one no longer saves
 )

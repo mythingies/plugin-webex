@@ -8,7 +8,6 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -2182,23 +2181,15 @@ func TestSendRefusedWhenSendingRecordCannotBeSaved(t *testing.T) {
 	api.addRoom("r", "Alice", theirs("t1", time.Minute))
 	s, _ := newTestService(t, api, newFakeDrafter(), func(c *Config) { c.StorePath = path })
 	rescan(s)
-	// Make the store directory a file, so no write can succeed.
-	dir := filepath.Dir(path)
-	if err := os.RemoveAll(dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dir, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// Cleanups run last-in first-out: put the directory back before the
+	// Make every write fail. (Removing the store directory would also remove
+	// the instance lock, which is a takeover, not a failed write.)
+	setStoreRename(s.store, func(string, string) error { return errors.New("disk full") })
+	// Cleanups run last-in first-out: let writes succeed again before the
 	// service's Close flushes the store.
-	t.Cleanup(func() {
-		_ = os.Remove(dir)
-		_ = os.MkdirAll(dir, 0o700)
-	})
+	t.Cleanup(func() { setStoreRename(s.store, os.Rename) })
 
 	_, status, e := s.Send(context.Background(), sendReq(s, "r", "hi"))
-	if e == nil || status < 400 || (e.Code != codeInternal && e.Code != CodeSignedOut) {
+	if e == nil || status != http.StatusInternalServerError || e.Code != codeInternal {
 		t.Fatalf("Send = %d %v, want a refusal", status, e)
 	}
 	assertNoSend(t, api)

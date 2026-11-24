@@ -60,6 +60,13 @@ func defaultRenameTries() int {
 // (--logout/--switch) while this store was open. Disabled then reports true.
 var ErrPurged = errors.New("replydesk store: state was purged by --logout or --switch; not saving")
 
+// ErrLockLost is returned by Put, PutSync and Prune once another webex-mcp
+// --review took over the instance lock (this one's heartbeat stopped, e.g.
+// across a long sleep). Unlike a purge the in-memory state is kept, but
+// nothing is written again: the other process owns replydesk.json now.
+// LockLost then reports true.
+var ErrLockLost = errors.New("replydesk store: another webex-mcp --review took over the store; not saving")
+
 // errStoreClosed is returned by writes after Close.
 var errStoreClosed = errors.New("replydesk store: closed")
 
@@ -80,7 +87,9 @@ type storeFile struct {
 // writes before it returns. Close flushes.
 //
 // A disk store holds replydesk.lock for its lifetime, so a second
-// --review on the same store gets ErrAlreadyRunning.
+// --review on the same store gets ErrAlreadyRunning. If another process
+// takes the lock over anyway (this one's heartbeat stalled), the store
+// stops writing for good and keeps its state in memory (ErrLockLost).
 type Store struct {
 	mu      sync.Mutex
 	path    string // "" means in-memory
@@ -267,11 +276,16 @@ func (s *Store) Get(roomID string) (Record, bool) {
 // write. It returns the error of the last background write, if that failed
 // and nothing has been written since; the record is kept in memory either
 // way. After a purge (see Disabled) it returns ErrPurged and keeps nothing.
+// After the instance lock was lost (see LockLost) it keeps the record in
+// memory, writes nothing, and returns ErrLockLost.
 func (s *Store) Put(r Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.putLocked(r); err != nil {
 		return err
+	}
+	if s.lockLostFlagLocked() {
+		return ErrLockLost
 	}
 	s.scheduleLocked()
 	return s.lastErr
@@ -279,7 +293,8 @@ func (s *Store) Put(r Record) error {
 
 // PutSync is Put, but the record is on disk before it returns. Use it for
 // state that must survive a crash (StateSending before the POST). The
-// record is kept in memory even if the write fails.
+// record is kept in memory even if the write fails, or is refused with
+// ErrLockLost.
 func (s *Store) PutSync(r Record) error {
 	s.mu.Lock()
 	err := s.putLocked(r)
@@ -362,6 +377,9 @@ func (s *Store) Prune(before time.Time) (int, error) {
 		return n, errStoreClosed
 	}
 	s.gen++
+	if s.lockLostFlagLocked() {
+		return n, ErrLockLost
+	}
 	s.scheduleLocked()
 	return n, s.lastErr
 }
@@ -389,6 +407,30 @@ func (s *Store) Disabled() bool {
 	return s.checkPurgedLocked()
 }
 
+// LockLost reports whether persistence stopped because another webex-mcp
+// --review took over the instance lock. It reads the lock file, so it
+// notices a takeover before the heartbeat or the next write does. Once true
+// it stays true.
+func (s *Store) LockLost() bool {
+	if s.lock == nil {
+		return false
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		// Close released the lock; only a loss seen before then counts.
+		return s.lock.lost.Load()
+	}
+	return s.lock.isLost()
+}
+
+// lockLostFlagLocked reports a lock loss already seen, without touching the
+// disk. s.mu must be held (it orders the read with the caller's state).
+func (s *Store) lockLostFlagLocked() bool {
+	return s.lock != nil && s.lock.lost.Load()
+}
+
 // Close stops the writer, flushes pending changes, and releases the
 // instance lock. It is safe to call more than once; later calls return the
 // first call's result. Get and All keep working on the in-memory state.
@@ -403,8 +445,11 @@ func (s *Store) Close() error {
 		s.closed = true
 		s.mu.Unlock()
 		ferr := s.flush()
-		if errors.Is(ferr, ErrPurged) {
-			ferr = nil // Disabled reports it; nothing was lost that should be kept
+		if errors.Is(ferr, ErrPurged) || errors.Is(ferr, ErrLockLost) {
+			// Disabled or LockLost reports it. After a purge nothing was
+			// lost that should be kept; after a takeover the other process
+			// owns the file.
+			ferr = nil
 		}
 		s.closeErr = errors.Join(ferr, s.lock.release())
 	})
@@ -433,6 +478,9 @@ func (s *Store) writer(interval time.Duration) {
 		}
 		err := s.flush()
 		last = time.Now()
+		if errors.Is(err, ErrLockLost) {
+			return // permanent; isLost logged it once
+		}
 		if err != nil && !errors.Is(err, ErrPurged) {
 			slog.Warn("replydesk: saving state failed; it is kept in memory and retried on the next change",
 				"error", err)
@@ -441,7 +489,8 @@ func (s *Store) writer(interval time.Duration) {
 }
 
 // flush writes the current state if it changed since the last successful
-// write. It checks for a purge before and after writing.
+// write. It checks for a purge before and after writing, and that the
+// instance lock is still ours right before replacing the file.
 func (s *Store) flush() error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -450,6 +499,10 @@ func (s *Store) flush() error {
 	if s.checkPurgedLocked() {
 		s.mu.Unlock()
 		return ErrPurged
+	}
+	if s.lockLostFlagLocked() {
+		s.mu.Unlock()
+		return ErrLockLost
 	}
 	if s.gen == s.written {
 		s.mu.Unlock()
@@ -470,6 +523,9 @@ func (s *Store) flush() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if errors.Is(err, ErrLockLost) {
+		return err // not a write failure: LockLost reports it
+	}
 	if err != nil {
 		s.lastErr = err
 		return err
@@ -490,7 +546,9 @@ func (s *Store) flush() error {
 }
 
 // writeFile writes data atomically: a fresh temp file in the store dir
-// (0600, owner-only ACL on Windows), then rename over the store.
+// (0600, owner-only ACL on Windows), then rename over the store. The
+// rename is skipped (ErrLockLost) if another process took over the
+// instance lock while the temp file was written.
 func (s *Store) writeFile(data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+tmpPattern)
 	if err != nil {
@@ -500,6 +558,12 @@ func (s *Store) writeFile(data []byte) error {
 	if err := writeTmp(f, data); err != nil {
 		_ = os.Remove(tmp)
 		return err
+	}
+	// As late as possible: a takeover between this check and the rename
+	// is still possible, but the window is the rename itself.
+	if s.lock != nil && s.lock.isLost() {
+		_ = os.Remove(tmp)
+		return ErrLockLost
 	}
 	if err := s.rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)

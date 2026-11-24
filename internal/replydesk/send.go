@@ -77,9 +77,9 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 
 	// a. The room must be pending and in a sendable state.
 	s.mu.Lock()
-	if s.isSignedOutLocked() {
+	if apiErr := s.unavailableLocked(); apiErr != nil {
 		s.mu.Unlock()
-		return "", http.StatusConflict, signedOutErr()
+		return "", http.StatusConflict, apiErr
 	}
 	pp, ok := s.pending[req.RoomID]
 	var st State
@@ -145,10 +145,10 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 		s.releaseSend(slot)
 		return "", http.StatusConflict, &APIError{Code: CodeNewMessages, Detail: "the conversation changed during the check; rescan"}
 	}
-	if s.isSignedOutLocked() {
+	if apiErr := s.unavailableLocked(); apiErr != nil {
 		s.mu.Unlock()
 		s.releaseSend(slot)
-		return "", http.StatusConflict, signedOutErr()
+		return "", http.StatusConflict, apiErr
 	}
 	e, r, has := s.effectiveLocked(cur)
 	if sendBlocked(e.state) {
@@ -161,28 +161,31 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 		draft = r.Draft
 	}
 	// While sending is set, Draft, Dismiss and Snooze refuse the room and a
-	// finishing draft is discarded, so nothing overwrites the records below
-	// while s.mu is released for the synchronous writes.
+	// finishing draft is held back (see recordDraft), so nothing overwrites
+	// the records below while s.mu is released for the synchronous writes.
 	s.sending[p.RoomID] = true
 	s.mu.Unlock()
 
+	// restore is the room as it was before this send, for the paths where
+	// nothing went out.
+	restore := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StatePending}
+	if has {
+		restore = r
+	}
 	base := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, Draft: draft}
 	sendingRec := base
 	sendingRec.State = StateSending
 	if err := s.putSync(sendingRec); err != nil {
 		// Without the sending record on disk a crash after the POST would
 		// hide that a reply may have gone out, so nothing is sent.
-		restore := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StatePending}
-		if has {
-			restore = r
-		}
-		s.mu.Lock()
-		if err := s.store.Put(restore); err != nil {
-			slog.Warn("replydesk: restoring state after a failed save", "err", err)
-		}
-		delete(s.sending, p.RoomID)
-		s.mu.Unlock()
+		s.restoreUnsent(restore, "replydesk: restoring state after a failed save")
 		s.releaseSend(slot)
+		switch {
+		case errors.Is(err, ErrLockLost):
+			return "", http.StatusConflict, lockLostErr()
+		case errors.Is(err, ErrPurged):
+			return "", http.StatusConflict, signedOutErr()
+		}
 		return "", http.StatusInternalServerError, &APIError{Code: codeInternal, Detail: shortErr("could not save Reply Desk state, so nothing was sent: ", err)}
 	}
 
@@ -190,16 +193,7 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 	if err != nil && s.noteAuthErr(err) {
 		// The token provider refused before any request was made (the client
 		// fetches the token first), so nothing went out: put the room back.
-		restore := Record{RoomID: p.RoomID, HeadID: p.HeadID, HeadCreated: p.HeadCreated, State: StatePending}
-		if has {
-			restore = r
-		}
-		s.mu.Lock()
-		if err := s.store.Put(restore); err != nil {
-			slog.Warn("replydesk: restoring state after sign-out", "err", err)
-		}
-		s.mu.Unlock()
-		s.doneSending(p.RoomID)
+		s.restoreUnsent(restore, "replydesk: restoring state after sign-out")
 		s.releaseSend(slot)
 		return "", http.StatusConflict, signedOutErr()
 	}
@@ -236,11 +230,30 @@ func (s *Service) Send(_ context.Context, req SendRequest) (string, int, *APIErr
 	return msg.ID, http.StatusOK, nil
 }
 
-// doneSending clears the in-flight send mark for a room.
+// doneSending clears the in-flight send mark for a room after a send that
+// went out, or may have. A draft that finished meanwhile is discarded.
 func (s *Service) doneSending(roomID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sending, roomID)
+	delete(s.heldDrafts, roomID)
+}
+
+// restoreUnsent puts a room back as it was before a send that did not go
+// out and clears its sending mark. A draft that finished during the send is
+// then applied as if it had finished now, so it is not lost and the room
+// does not show "drafting was interrupted".
+func (s *Service) restoreUnsent(restore Record, logMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.store.Put(restore); err != nil && !errors.Is(err, ErrLockLost) {
+		slog.Warn(logMsg, "err", err)
+	}
+	delete(s.sending, restore.RoomID)
+	if o, ok := s.heldDrafts[restore.RoomID]; ok {
+		delete(s.heldDrafts, restore.RoomID)
+		s.recordDraftLocked(&o.p, o.draft, o.errMsg)
+	}
 }
 
 // reserveSend takes a send slot if the rate limit allows one.
@@ -390,8 +403,8 @@ func (s *Service) Snooze(roomID string, hours int) *APIError {
 // closableLocked looks up a room for Dismiss or Snooze: signed out, unknown,
 // and mid-send rooms are refused. s.mu must be held.
 func (s *Service) closableLocked(roomID string) (*Pending, effective, Record, bool, *APIError) {
-	if s.isSignedOutLocked() {
-		return nil, effective{}, Record{}, false, signedOutErr()
+	if apiErr := s.unavailableLocked(); apiErr != nil {
+		return nil, effective{}, Record{}, false, apiErr
 	}
 	p, ok := s.pending[roomID]
 	if !ok {

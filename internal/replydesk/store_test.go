@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -947,6 +948,37 @@ func TestOpenStore_AlreadyRunning(t *testing.T) {
 	mustOpen(t, path, testOwner)
 }
 
+// writeForeignLock writes a lock file with content in path's store dir,
+// with an mtime age ago, and returns the lock's path.
+func writeForeignLock(t *testing.T, path, content string, age time.Duration) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(filepath.Dir(path), lockFileName)
+	if err := os.WriteFile(lock, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-age)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	return lock
+}
+
+// exitedPID runs a child process to completion and returns its pid, which
+// then names no running process.
+func exitedPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$") // #nosec G204 G702 -- re-runs this test binary with no tests
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("running a child process: %v", err)
+	}
+	return cmd.ProcessState.Pid()
+}
+
+// The mtime rule, for a holder that is alive and for a lock whose pid can't
+// be read: only a lock whose heartbeat stopped is taken over.
 func TestOpenStore_StaleLockTakeover(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -958,48 +990,234 @@ func TestOpenStore_StaleLockTakeover(t *testing.T) {
 		{"stale", 4 * time.Minute, true},
 		{"long dead", 48 * time.Hour, true},
 	}
+	// The parent (go test, or the shell) is running and is not us.
+	live := os.Getppid()
+	holders := []struct {
+		name    string
+		content string
+		pidName string // what ErrAlreadyRunning names, "" for nothing
+	}{
+		{"live pid", fmt.Sprintf("pid=%d\ntime=2026-11-01T00:00:00Z\nnonce=00\n", live), fmt.Sprintf("pid %d", live)},
+		{"unreadable pid", "pid=garbage\ntime=2026-11-01T00:00:00Z\nnonce=00\n", ""},
+		{"no pid", "time=2026-11-01T00:00:00Z\nnonce=00\n", ""},
+	}
+	for _, h := range holders {
+		for _, tt := range tests {
+			t.Run(h.name+"/"+tt.name, func(t *testing.T) {
+				path := storePath(t)
+				lock := writeForeignLock(t, path, h.content, tt.age)
+				foreign := []byte(h.content)
+
+				s, err := OpenStore(path, testOwner)
+				if !tt.wantTake {
+					if !errors.Is(err, ErrAlreadyRunning) {
+						t.Fatalf("OpenStore = %v, want ErrAlreadyRunning", err)
+					}
+					if h.pidName != "" && !strings.Contains(err.Error(), h.pidName) {
+						t.Errorf("error %q does not name the holder", err)
+					}
+					data, rerr := os.ReadFile(lock) // #nosec G304 -- test temp path
+					if rerr != nil || string(data) != string(foreign) {
+						t.Errorf("a fresh lock was disturbed: %q, %v", data, rerr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("OpenStore over a stale lock: %v", err)
+				}
+				t.Cleanup(func() { _ = s.Close() })
+				assertOurLock(t, lock)
+			})
+		}
+	}
+}
+
+func assertOurLock(t *testing.T, lock string) {
+	t.Helper()
+	data, err := os.ReadFile(lock) // #nosec G304 -- test temp path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), fmt.Sprintf("pid=%d\n", os.Getpid())) {
+		t.Errorf("lock after takeover = %q, want our pid", data)
+	}
+}
+
+// R6: a lock left by a process that is gone is taken over at once, not
+// after lockStaleAfter, so --review right after a crash works.
+func TestOpenStore_DeadHolderTakenOverAtOnce(t *testing.T) {
+	dead := exitedPID(t)
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"exited pid", fmt.Sprintf("pid=%d\ntime=2026-11-01T00:00:00Z\nnonce=00\n", dead)},
+		// Our pid, but not a lock this process holds: an earlier process
+		// that had our pid crashed.
+		{"our pid, not held here", fmt.Sprintf("pid=%d\ntime=2026-11-01T00:00:00Z\nnonce=ff\n", os.Getpid())},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := storePath(t)
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			lock := filepath.Join(filepath.Dir(path), lockFileName)
-			foreign := []byte("pid=999999\ntime=2026-11-01T00:00:00Z\nnonce=00\n")
-			if err := os.WriteFile(lock, foreign, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			old := time.Now().Add(-tt.age)
-			if err := os.Chtimes(lock, old, old); err != nil {
-				t.Fatal(err)
-			}
-
+			lock := writeForeignLock(t, path, tt.content, 0)
 			s, err := OpenStore(path, testOwner)
-			if !tt.wantTake {
-				if !errors.Is(err, ErrAlreadyRunning) {
-					t.Fatalf("OpenStore = %v, want ErrAlreadyRunning", err)
-				}
-				if !strings.Contains(err.Error(), "pid 999999") {
-					t.Errorf("error %q does not name the holder", err)
-				}
-				data, rerr := os.ReadFile(lock) // #nosec G304 -- test temp path
-				if rerr != nil || string(data) != string(foreign) {
-					t.Errorf("a fresh lock was disturbed: %q, %v", data, rerr)
-				}
-				return
-			}
 			if err != nil {
-				t.Fatalf("OpenStore over a stale lock: %v", err)
+				t.Fatalf("OpenStore over a fresh lock of a gone holder = %v, want it taken over", err)
 			}
 			t.Cleanup(func() { _ = s.Close() })
-			data, err := os.ReadFile(lock) // #nosec G304 -- test temp path
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(data), fmt.Sprintf("pid=%d\n", os.Getpid())) {
-				t.Errorf("lock after takeover = %q, want our pid", data)
-			}
+			assertOurLock(t, lock)
 		})
+	}
+}
+
+func TestProcessState(t *testing.T) {
+	if got := processState(os.Getpid()); got != procAlive {
+		t.Errorf("processState(self) = %v, want alive", got)
+	}
+	if got := processState(os.Getppid()); got != procAlive {
+		t.Errorf("processState(parent) = %v, want alive", got)
+	}
+	if got := processState(exitedPID(t)); got != procDead {
+		t.Errorf("processState(exited child) = %v, want dead", got)
+	}
+	if got := processState(0); got != procUnknown {
+		t.Errorf("processState(0) = %v, want unknown", got)
+	}
+}
+
+func TestLockPID(t *testing.T) {
+	tests := []struct {
+		in   string
+		pid  int
+		want bool
+	}{
+		{"pid=42\ntime=x\n", 42, true},
+		{"time=x\npid=7\n", 7, true},
+		{"pid=42\r\n", 42, true},
+		{"pid=\n", 0, false},
+		{"pid=-3\n", 0, false},
+		{"pid=0\n", 0, false},
+		{"pid=4x\n", 0, false},
+		{"", 0, false},
+	}
+	for _, tt := range tests {
+		pid, ok := lockPID([]byte(tt.in))
+		if pid != tt.pid || ok != tt.want {
+			t.Errorf("lockPID(%q) = %d %v, want %d %v", tt.in, pid, ok, tt.pid, tt.want)
+		}
+	}
+}
+
+// R5/R7: once another process takes the lock over, this store writes
+// nothing more, keeps its state in memory, and says why (not a purge). The
+// check runs right before the rename, so a write in flight is not landed.
+func TestStore_LockLostStopsWriting(t *testing.T) {
+	path := storePath(t)
+	lock := filepath.Join(filepath.Dir(path), lockFileName)
+	s := mustOpen(t, path, testOwner)
+	if err := s.PutSync(sampleRecord("before")); err != nil {
+		t.Fatal(err)
+	}
+	if s.LockLost() {
+		t.Fatal("LockLost before any takeover")
+	}
+
+	// Another --review takes the lock over (as after a long sleep).
+	other := []byte("pid=1\ntime=2026-11-01T00:00:00Z\nnonce=other\n")
+	if err := os.WriteFile(lock, other, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing has looked at the lock yet: the pre-rename check catches it.
+	if err := s.PutSync(sampleRecord("during")); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("PutSync after takeover = %v, want ErrLockLost", err)
+	}
+	if fileHasRoom(path, "during") {
+		t.Fatal("a write landed after the lock was taken over")
+	}
+	if tmps := tmpFiles(t, path); len(tmps) != 0 {
+		t.Fatalf("temp files left behind: %v", tmps)
+	}
+	if !s.LockLost() {
+		t.Fatal("LockLost = false after takeover")
+	}
+	if s.Disabled() {
+		t.Fatal("a takeover reported as a purge")
+	}
+
+	if err := s.Put(sampleRecord("after")); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("Put after takeover = %v, want ErrLockLost", err)
+	}
+	for _, room := range []string{"before", "during", "after"} {
+		if _, ok := s.Get(room); !ok {
+			t.Errorf("record %s dropped from memory", room)
+		}
+	}
+	if _, err := s.Prune(time.Now().Add(time.Hour)); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("Prune after takeover = %v, want ErrLockLost", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close after takeover = %v, want nil", err)
+	}
+	if got := readFile(t, path); len(got.Records) != 1 || got.Records["before"].RoomID != "before" {
+		t.Fatalf("store on disk changed after takeover: %+v", got.Records)
+	}
+	if data, err := os.ReadFile(lock); err != nil || string(data) != string(other) { // #nosec G304 -- test temp path
+		t.Fatalf("the other process's lock was disturbed: %q %v", data, err)
+	}
+	if !s.LockLost() {
+		t.Fatal("LockLost forgot the takeover after Close")
+	}
+}
+
+// A takeover seen by the heartbeat disables writes without any read, and
+// the heartbeat stops refreshing the other process's lock.
+func TestStore_HeartbeatSeesTakeover(t *testing.T) {
+	setVar(t, &lockHeartbeat, 5*time.Millisecond)
+	setVar(t, &storeFlushInterval, time.Hour)
+	path := storePath(t)
+	lock := filepath.Join(filepath.Dir(path), lockFileName)
+	s := mustOpen(t, path, testOwner)
+
+	other := []byte("pid=1\nnonce=other\n")
+	if err := os.WriteFile(lock, other, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "heartbeat noticing the takeover", func() bool { return s.lock.lost.Load() })
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // ten heartbeats
+	if fi, err := os.Stat(lock); err != nil || time.Since(fi.ModTime()) < 30*time.Minute {
+		t.Fatalf("the heartbeat refreshed another process's lock (%v)", err)
+	}
+	s.mu.Lock()
+	err := s.putLocked(sampleRecord("x"))
+	lost := s.lockLostFlagLocked()
+	s.mu.Unlock()
+	if err != nil || !lost {
+		t.Fatalf("putLocked = %v, lost flag = %v", err, lost)
+	}
+	if err := s.Put(sampleRecord("y")); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("Put = %v, want ErrLockLost", err)
+	}
+	if exists(path) {
+		t.Fatal("the store file was written after the takeover")
+	}
+}
+
+// A lock file that is briefly unreadable is not a takeover.
+func TestInstanceLock_ReadErrorIsNotLoss(t *testing.T) {
+	dir := t.TempDir()
+	l := &instanceLock{path: filepath.Join(dir, "missing-dir", "x", lockFileName), owner: []byte("me")}
+	// A missing file is a loss...
+	if !l.isLost() {
+		t.Fatal("missing lock file not seen as lost")
+	}
+	// ...but a path that can't be read for another reason is not.
+	l2 := &instanceLock{path: dir, owner: []byte("me")} // a directory: ReadFile fails, not ErrNotExist
+	if l2.isLost() {
+		t.Fatal("an unreadable lock counted as lost")
 	}
 }
 

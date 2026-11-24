@@ -52,6 +52,7 @@ const (
 const (
 	msgDraftInterrupted = "drafting was interrupted"
 	msgSignedOut        = "You signed out in another window - restart webex-mcp --review"
+	msgLockLost         = "Reply Desk was opened in another window; this window no longer saves changes - close it"
 )
 
 // retentionFor is how long untouched records are kept for a lookback: at
@@ -296,6 +297,9 @@ type Service struct {
 	// signedOut reports whether the stored state was purged by --logout or
 	// --switch in another process. It is store.Disabled; tests replace it.
 	signedOut func() bool
+	// lockLost reports whether another --review took over the store, so
+	// this process no longer saves. It is store.LockLost; tests replace it.
+	lockLost func() bool
 	// authSignedOut is set once a Webex call failed with auth.ErrSignedOut:
 	// --logout or --switch ran in another process. Guarded by mu.
 	authSignedOut bool
@@ -325,9 +329,22 @@ type Service struct {
 	// the regenerate instruction it was started with. A queued draft (one
 	// still waiting for a drafter slot) counts: the room shows as drafting
 	// from the moment the user asks.
-	drafting  map[string]string
-	sending   map[string]bool // rooms with a send in progress
-	sendTimes []time.Time     // recent sends, for the rate limit
+	drafting map[string]string
+	sending  map[string]bool // rooms with a send in progress
+	// heldDrafts holds the outcome of a draft that finished while its room
+	// was sending. A send that does not go out (its record could not be
+	// saved, or the user was signed out) applies it when it restores the
+	// room; a send that went out, or may have, discards it.
+	heldDrafts map[string]draftOutcome
+	sendTimes  []time.Time // recent sends, for the rate limit
+}
+
+// draftOutcome is a finished draft run: the room as drafted, and the draft
+// or the error to show.
+type draftOutcome struct {
+	p      Pending
+	draft  *Draft
+	errMsg string
 }
 
 // NewService resolves the user (GetMe), opens the store bound to them, and
@@ -380,6 +397,7 @@ func NewService(cfg Config) (*Service, error) {
 		now:          cfg.Now,
 		preDraft:     cfg.PreDraft,
 		signedOut:    store.Disabled,
+		lockLost:     store.LockLost,
 		draftSem:     make(chan struct{}, maxDraftsInFlight),
 		draftTimeout: draftTimeout,
 		rootCtx:      rootCtx,
@@ -388,6 +406,7 @@ func NewService(cfg Config) (*Service, error) {
 		pending:      make(map[string]*Pending),
 		drafting:     make(map[string]string),
 		sending:      make(map[string]bool),
+		heldDrafts:   make(map[string]draftOutcome),
 	}
 	if n, err := store.Prune(cfg.Now().Add(-retentionFor(cfg.Lookback))); err != nil {
 		s.noteStoreErr(err)
@@ -451,10 +470,43 @@ func (s *Service) noteAuthErr(err error) bool {
 	return true
 }
 
+// isLockLostLocked reports whether another --review took over the store.
+// s.mu must be held.
+func (s *Service) isLockLostLocked() bool {
+	return s.lockLost != nil && s.lockLost()
+}
+
+// unavailableLocked is the error every action returns once this process
+// must stop: signed out elsewhere, or the store taken over. s.mu must be
+// held.
+func (s *Service) unavailableLocked() *APIError {
+	switch {
+	case s.isSignedOutLocked():
+		return signedOutErr()
+	case s.isLockLostLocked():
+		return lockLostErr()
+	}
+	return nil
+}
+
+// SignedOut reports whether --logout or --switch ran in another process
+// while this one was open. The server refuses items and scans then.
+func (s *Service) SignedOut() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isSignedOutLocked()
+}
+
 // signedOutErr is returned by every state-changing action once the state
 // was purged by another process.
 func signedOutErr() *APIError {
 	return &APIError{Code: CodeSignedOut, Detail: msgSignedOut}
+}
+
+// lockLostErr is returned by every action once another --review took over
+// the store.
+func lockLostErr() *APIError {
+	return &APIError{Code: CodeLockLost, Detail: msgLockLost}
 }
 
 // ---- effective state ----
@@ -583,7 +635,9 @@ func (s *Service) noteStoreErr(err error) {
 }
 
 func (s *Service) noteStoreErrLocked(err error) {
-	slog.Warn("replydesk: saving state failed", "err", err)
+	if !errors.Is(err, ErrLockLost) { // the store logged the takeover once
+		slog.Warn("replydesk: saving state failed", "err", err)
+	}
 	s.storeErr = shortErr("saving Reply Desk state failed: ", err)
 }
 
@@ -608,9 +662,14 @@ func stateGroup(st State) int {
 
 // Items lists one item per pending room. Sent and dismissed rooms are hidden
 // unless all is set. Records for rooms the last scan did not list (answered
-// since, or outside the lookback) are never shown.
+// since, or outside the lookback) are never shown. Once signed out
+// elsewhere the list is empty: those are the signed-out account's DMs.
 func (s *Service) Items(all bool) []ItemView {
 	s.mu.Lock()
+	if s.isSignedOutLocked() {
+		s.mu.Unlock()
+		return []ItemView{}
+	}
 	type row struct {
 		p *Pending
 		e effective
@@ -749,9 +808,13 @@ func (s *Service) Status() StatusView {
 		}
 		errMsg += s.storeErr
 	}
-	if s.isSignedOutLocked() {
+	switch {
+	case s.isSignedOutLocked():
 		// Scan and save errors after a sign-out follow from it.
 		errMsg = msgSignedOut
+	case s.isLockLostLocked():
+		// So do save errors after a takeover.
+		errMsg = msgLockLost
 	}
 	return StatusView{
 		Me:            s.meName,
@@ -767,13 +830,15 @@ func (s *Service) Status() StatusView {
 
 // ---- scanning ----
 
-// Rescan starts a background scan unless one is already running or the
-// Service is closed. The scan stops when ctx is cancelled or Close is
-// called. When it finishes, the pending set is replaced and the newest
-// items are drafted.
+// Rescan starts a background scan unless one is already running, the
+// Service is closed, or the user signed out elsewhere (the scan would list
+// the signed-out account's DMs). After a store takeover it still scans: the
+// results stay in memory, and drafting and every action are refused. The
+// scan stops when ctx is cancelled or Close is called. When it finishes,
+// the pending set is replaced and the newest items are drafted.
 func (s *Service) Rescan(ctx context.Context) {
 	s.mu.Lock()
-	if s.scanning || s.closed {
+	if s.scanning || s.closed || s.isSignedOutLocked() {
 		s.mu.Unlock()
 		return
 	}
@@ -812,6 +877,11 @@ func (s *Service) finishScan(res scanResult) {
 			next[id] = p
 		}
 	}
+	if s.isSignedOutLocked() {
+		// A scan that was running when the user signed out elsewhere: do
+		// not keep that account's DMs.
+		next = make(map[string]*Pending)
+	}
 	s.pending = next
 	s.scanning = false
 	s.lastScan = s.now()
@@ -842,7 +912,7 @@ func scanErrMessage(res scanResult) string {
 // preDraftLocked starts background drafts for the newest pending items
 // without a draft for their current head. s.mu must be held.
 func (s *Service) preDraftLocked() {
-	if s.preDraft <= 0 || s.drafter.Mode() == ModeOff || s.closed || s.isSignedOutLocked() {
+	if s.preDraft <= 0 || s.drafter.Mode() == ModeOff || s.closed || s.unavailableLocked() != nil {
 		return
 	}
 	ps := make([]*Pending, 0, len(s.pending))
@@ -890,8 +960,8 @@ func hasDraftableText(p *Pending) bool {
 func (s *Service) Draft(_ context.Context, roomID, instruction string) *APIError {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.isSignedOutLocked() {
-		return signedOutErr()
+	if apiErr := s.unavailableLocked(); apiErr != nil {
+		return apiErr
 	}
 	p, ok := s.pending[roomID]
 	if !ok {
@@ -1003,14 +1073,24 @@ func (s *Service) writeDraft(p *Pending, instruction, previous string) (*Draft, 
 }
 
 // recordDraft stores a finished draft (or its failure) for p. A send in
-// progress or done always wins: the draft is then discarded.
+// progress or done always wins. While the room is sending the outcome is
+// held: the send applies it if it restores the room without sending, and
+// discards it otherwise.
 func (s *Service) recordDraft(p *Pending, draft *Draft, errMsg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.drafting, p.RoomID)
 	if s.sending[p.RoomID] {
-		return // the send's record must not be overwritten
+		// The send's record must not be overwritten.
+		s.heldDrafts[p.RoomID] = draftOutcome{p: *p, draft: draft, errMsg: errMsg}
+		return
 	}
+	s.recordDraftLocked(p, draft, errMsg)
+}
+
+// recordDraftLocked applies a finished draft to the room's stored record.
+// s.mu must be held and the room must not be sending.
+func (s *Service) recordDraftLocked(p *Pending, draft *Draft, errMsg string) {
 	r, has := s.store.Get(p.RoomID)
 	switch {
 	case !has || (r.HeadID == p.HeadID && r.State == StateDrafting):

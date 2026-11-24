@@ -28,6 +28,10 @@
   const SEND_LOST = 'We lost the connection while sending - check the state below before retrying';
   const OPEN_FROM_LINK = 'Open Reply Desk from the link printed by webex-mcp --review';
   const SIGNED_OUT = 'You signed out in another window - close this page and run webex-mcp --review again';
+  const LOCK_LOST = 'Reply Desk was opened in another window; this window no longer saves changes - close it';
+  // Error codes that end this page's session on any endpoint: the page locks
+  // with the matching message.
+  const PAGE_LOCK_CODES = { signed_out: SIGNED_OUT, lock_lost: LOCK_LOST };
   const BUSY = 'A draft is already being written - try again when it finishes';
   const DRAFTER_OFF = 'Drafting is unavailable - you can still write the reply yourself';
   // The server's limit on a regenerate instruction, in UTF-8 bytes.
@@ -140,6 +144,8 @@
         return DRAFTER_OFF;
       case 'signed_out':
         return SIGNED_OUT;
+      case 'lock_lost':
+        return LOCK_LOST;
       default:
         return '';
     }
@@ -318,6 +324,7 @@
       case 'busy':
       case 'drafter_off':
       case 'signed_out':
+      case 'lock_lost':
         r.message = codeMessage(code);
         break;
       default:
@@ -493,8 +500,9 @@
     }
     if (!res.ok) {
       const err = data && typeof data.code === 'string' ? data : { code: '', detail: res.statusText || '' };
-      if (err.code === 'signed_out') {
-        lock(SIGNED_OUT);
+      if (Object.prototype.hasOwnProperty.call(PAGE_LOCK_CODES, err.code)) {
+        // From any endpoint, GET /api/items and POST /api/scan included.
+        lock(PAGE_LOCK_CODES[err.code]);
       } else if (res.status === 403 && method === 'GET' && err.code === 'forbidden') {
         // A GET is refused only for a bad CSRF token: this page did not come
         // from the launch link (or the token is from an earlier run).
