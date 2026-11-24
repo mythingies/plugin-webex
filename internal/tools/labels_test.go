@@ -139,6 +139,11 @@ func assertCleanEmail(t *testing.T, tool, out string, maskedEmail bool) {
 	if maskedEmail && strings.Contains(out, evilEmail) {
 		t.Errorf("%s: output carries an unmasked email:\n%s", tool, out)
 	}
+	// The lookup tools must return the full address: finding someone's
+	// email is what they are for (see the comment in people.go).
+	if !maskedEmail && !strings.Contains(out, evilEmail) {
+		t.Errorf("%s: output lacks the full email address:\n%s", tool, out)
+	}
 	lower := strings.ToLower(out)
 	opens := strings.Count(out, "<external-message>")
 	closes := strings.Count(out, "</external-message>")

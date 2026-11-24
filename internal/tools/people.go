@@ -12,9 +12,14 @@ import (
 	"github.com/mythingies/plugin-webex/internal/webex"
 )
 
+// The people-lookup tools (get_users, get_user_profile) return full email
+// addresses on purpose: looking up who someone is and how to reach them is
+// what they are for. Every other tool masks emails with maskEmail. Names
+// still go through safetext.Label because a display name is user-chosen.
+
 func registerGetUsers(s *mcpserver.MCPServer, client *webex.Client) {
 	tool := mcp.NewTool("get_users",
-		mcp.WithDescription("List members of a Webex space."),
+		mcp.WithDescription("List members of a Webex space with each member's name, full email address, and person ID."),
 		mcp.WithString("room_id",
 			mcp.Required(),
 			mcp.Description("The ID of the space to list members from."),
@@ -55,7 +60,7 @@ func registerGetUsers(s *mcpserver.MCPServer, client *webex.Client) {
 
 func registerGetUserProfile(s *mcpserver.MCPServer, client *webex.Client) {
 	tool := mcp.NewTool("get_user_profile",
-		mcp.WithDescription("Get detailed profile information for a Webex user."),
+		mcp.WithDescription("Get detailed profile information for a Webex user, including their full email address."),
 		mcp.WithString("person_id",
 			mcp.Required(),
 			mcp.Description("The ID of the person to look up. Use 'me' for the authenticated user."),

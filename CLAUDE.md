@@ -102,7 +102,7 @@ Read-side semantics matter: `get_notifications`, `get_priority_inbox`, `get_ment
 
 These come from the MAESTRO threat model (`THREAT_MODEL.md`). New tools must follow them:
 - Wrap any Webex-sourced text in `safetext.Sandbox()` (`<external-message>…</external-message>`) as a prompt-injection guard. It neutralizes opening and closing wrapper tags inside the text (F19); sandbox *before* truncating, so a cut can't leave a partial tag behind.
-- Mask emails in output with `maskEmail()`.
+- Mask emails in output with `maskEmail()`. The exceptions are `get_users` and `get_user_profile`, which return full addresses on purpose because looking people up is their job (`people.go`, asserted in `labels_test.go`). Labels such as display names still go through `safetext.Label`.
 - Run outbound text and markdown through `safetext.Prepare` / `safetext.Sanitize`. These allow only http/https/mailto URLs (so no `javascript:`, `data:`, or `wmcp://`), replace any other `scheme:` match in place (including one inside a Markdown link, and `<@personEmail:…>` mentions), turn `<@all>` into `[blocked-mention]`, and leave whitespace and newlines alone. Tests: `internal/safetext/safetext_test.go`. Enforce `safetext.MaxMessageLen` (7439 bytes, checked on the raw input) and `maxCardJSONLen` (28000).
 - Local file reads that a Webex message could steer go through a root-restricted check like `readShareable()` in `share_file.go`: regular files only (no symlinks), under CWD, the OS temp dir, or `WEBEX_SHARE_DIRS`, refusing hidden path components and key/credential/`.env` names.
 - Call `auditLog()` for tool actions; drain-type tools are rate-limited (`toolRateInterval`).
