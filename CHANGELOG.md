@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `share_file` uploads a local file to a space or thread with an optional `text` or `markdown` message, as `multipart/form-data` like the Webex Go SDK's `CreateWithAttachment`. It was a stub.
 - `docs/adr/0001-local-index-daemon-and-agent-dispatch.md` (Accepted): split into a long-running indexing daemon and the per-session MCP server, with SQLite/FTS5 storage, rules in `agents/*.md` frontmatter, `claude -p` dispatch, and an external, opt-in knowledge layer (notegraph over MCP). The decisions rest on a 6-month backfill spike and an LLM-judged retrieval hit rate.
 
+### Fixed
+- `webex-mcp --setup` with an existing session used to print "Nothing to do" and write no `.mcp.json`. Running it in a new directory left the server unregistered there, and rerunning it never repaired a `.mcp.json` whose binary path had gone stale. It now writes or repairs `./.mcp.json` without opening the browser. The client ID comes from `WEBEX_CLIENT_ID`, then the stored session, then the existing `.mcp.json`. If no client secret is stored, it opens the wizard.
+- The setup wizard overwrote `.mcp.json` whole, dropping any other MCP servers in it. It now replaces only the `webex` entry. It keeps non-auth env vars such as `WEBEX_SHARE_DIRS`, and it refuses to overwrite a file that isn't valid JSON.
+- Started from a directory without `.webex-agents.yml` or `agents/`, the server routed nothing and inlined no playbooks. The shipped routes and playbooks are now built into the binary and used as a fallback; files in the working directory still take precedence. An invalid or unreadable `.webex-agents.yml` still means no routes, not the built-in ones.
+- `--setup` printed an already-expired access token as "valid until <past date>". It now says the token renews automatically.
+- The setup wizard's detection step panicked when `WEBEX_CLIENT_ID` was shorter than 4 characters, because it sliced the ID to mask it. All credential masking now goes through one helper that handles short values.
+- The setup wizard ignored a failure to register the `wmcp://` handler, so a user could wait out the 5-minute sign-in timeout without being told why. It now logs a warning.
+
+### Changed
+- OAuth tokens are saved with their client ID (`client_id` in the token store). Sessions from earlier versions pick it up on their next refresh.
+
 ### Security
 - `share_file` reads only regular files, not symlinks, up to 100 MB, under the working directory, the OS temp directory, or a directory in `WEBEX_SHARE_DIRS`. It refuses a path with a hidden component, such as `.ssh`, and key, credential, token, and `.env` file names, so a Webex message cannot talk the model into uploading a secret. Refusals are audit-logged.
 

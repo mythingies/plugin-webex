@@ -1,16 +1,32 @@
 package tools
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	pluginwebex "github.com/mythingies/plugin-webex"
 )
 
 // withPlaybookDir runs fn from a temp working directory containing
-// agents/<file>=<content> entries, restoring CWD afterward.
+// agents/<file>=<content> entries and no built-in playbooks, so tests see
+// only the files they create.
 func withPlaybookDir(t *testing.T, files map[string]string, fn func()) {
 	t.Helper()
+	withPlaybooks(t, files, fstest.MapFS{}, fn)
+}
+
+// withPlaybooks is withPlaybookDir with builtin standing in for the embedded
+// playbooks. CWD and the embedded set are restored afterward.
+func withPlaybooks(t *testing.T, files map[string]string, builtin fstest.MapFS, fn func()) {
+	t.Helper()
+	origFS := builtinPlaybooks
+	builtinPlaybooks = builtin
+	t.Cleanup(func() { builtinPlaybooks = origFS })
+
 	origWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -138,4 +154,39 @@ func TestRenderPlaybooks_EmptyWhenAllMissing(t *testing.T) {
 			t.Fatalf("expected empty when no playbooks found, got %q", got)
 		}
 	})
+}
+
+func TestLoadPlaybook_FallsBackToBuiltin(t *testing.T) {
+	builtin := fstest.MapFS{"agents/general.md": {Data: []byte(" shipped playbook ")}}
+	withPlaybooks(t, nil, builtin, func() {
+		if got := loadPlaybook("general"); got != "shipped playbook" {
+			t.Fatalf("expected built-in playbook, got %q", got)
+		}
+	})
+}
+
+func TestLoadPlaybook_DiskOverridesBuiltin(t *testing.T) {
+	builtin := fstest.MapFS{"agents/general.md": {Data: []byte("shipped")}}
+	withPlaybooks(t, map[string]string{"general.md": "local"}, builtin, func() {
+		if got := loadPlaybook("general"); got != "local" {
+			t.Fatalf("expected local playbook to win, got %q", got)
+		}
+	})
+}
+
+func TestBuiltinPlaybooks_Embedded(t *testing.T) {
+	// Read the real embedded set, not whatever a test swapped in.
+	entries, err := fs.ReadDir(pluginwebex.Playbooks, playbookDir)
+	if err != nil {
+		t.Fatalf("reading embedded playbooks: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no playbooks embedded")
+	}
+	for _, e := range entries {
+		name := strings.TrimSuffix(e.Name(), ".md")
+		if !safeAgentName(name) {
+			t.Errorf("embedded playbook %q has a name loadPlaybook would reject", e.Name())
+		}
+	}
 }

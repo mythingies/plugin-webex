@@ -30,12 +30,12 @@ make clean
 ### Binary subcommands (`cmd/webex-mcp/main.go`)
 
 Checked as `os.Args[1]` before the server starts:
-- `--setup [--force]` — detect-first: if a usable OAuth session exists it prints the identity and exits; otherwise opens the local browser wizard (`internal/setup`, `setup.html`) on a random localhost port, which writes `.mcp.json` and the keychain entries. `--force` re-authenticates anyway.
+- `--setup [--force]` — detect-first: if a usable OAuth session exists it prints the identity, then `setup.EnsureMCPConfig` writes or repairs `./.mcp.json` without a browser. The client ID comes from `WEBEX_CLIENT_ID`, then `StoredTokens.ClientID` (saved since v0.9.6), then the existing `.mcp.json`; with no ID it exits 1, and with no stored secret for it the wizard opens. Otherwise it opens the local browser wizard (`internal/setup`, `setup.html`) on a random localhost port, which writes `.mcp.json` and the keychain entries. `--force` re-authenticates anyway. Both paths go through `mergeMCPConfig` (`internal/setup/mcpconfig.go`). It replaces only `mcpServers.webex` with `command` + `env`: auth env keys are reset and other env keys are kept. Other servers stay, and it refuses to overwrite invalid JSON. `.mcp.json` lands in the CWD, which is how a user scopes the server to one directory.
 - `--switch` — clear stored OAuth tokens, then run setup for a different account (client secret is kept).
 - `--logout` — clear stored OAuth tokens only.
 - `--register-protocol` / `--oauth-callback <url>` — register and handle the `wmcp://oauth-callback` URI scheme used by the PKCE flow.
 
-With no subcommand it resolves auth, loads routing config from `WEBEX_AGENTS_CONFIG` (default `.webex-agents.yml`, relative to CWD; falls back to `router.DefaultConfig()` on missing/invalid), and serves MCP on stdio.
+With no subcommand it resolves auth, loads routing config from `WEBEX_AGENTS_CONFIG` (default `.webex-agents.yml`, relative to CWD). A missing file falls back to `router.BuiltinConfig()`, the repo's `.webex-agents.yml` embedded by the root package `embed.go`. An invalid file falls back to `router.DefaultConfig()`, which has no routes, so a broken user config is never silently swapped for the sample routes. Then it serves MCP on stdio.
 
 ### Releasing
 
@@ -86,7 +86,7 @@ Read-side semantics matter: `get_notifications`, `get_priority_inbox`, `get_ment
 
 ### Agent playbooks (`internal/tools/playbooks.go`)
 
-`get_notifications`, `get_priority_inbox`, and `get_mentions` (not `get_pending`) call `renderPlaybooks()` to inline `agents/<agent>.md` for each distinct routed agent into the tool result. Paths resolve **relative to the process CWD** (`playbookDir = "agents"`), capped at 4 KB each, cached, and silently skipped if missing. Agent names are validated against `[A-Za-z0-9_-]`. That allowlist is intentionally duplicated from `router/config.go` so the tools package does not import router. Keep the two in sync.
+`get_notifications`, `get_priority_inbox`, and `get_mentions` (not `get_pending`) call `renderPlaybooks()` to inline `agents/<agent>.md` for each distinct routed agent into the tool result. Paths resolve **relative to the process CWD** (`playbookDir = "agents"`). Only when the file doesn't exist there does it fall back to the copy embedded from the repo's `agents/` (`pluginwebex.Playbooks`; tests swap `builtinPlaybooks`). Playbooks are capped at 4 KB each, cached, and silently skipped if missing from both. `TestBuiltinConfig` requires every built-in route's agent to have an embedded playbook. Agent names are validated against `[A-Za-z0-9_-]`. That allowlist is intentionally duplicated from `router/config.go` so the tools package does not import router. Keep the two in sync.
 
 ### Security invariants in `internal/tools/tools.go`
 
@@ -101,7 +101,7 @@ These come from the MAESTRO threat model (`THREAT_MODEL.md`). New tools must fol
 ## Plugin assets
 
 - `.claude-plugin/plugin.json`: plugin manifest. `commands/webex.md` is the `/webex` slash command.
-- `agents/*.md`: the playbooks above. `.webex-agents.yml` is the routing config users edit.
+- `agents/*.md`: the playbooks above. `.webex-agents.yml` is the routing config users edit. Both are also `go:embed`ded into the binary by `embed.go` (package `pluginwebex`) as the built-in defaults, so editing them changes the shipped defaults.
 - `skills/webex-monitor/SKILL.md`: auto-checks notifications while the listener is connected.
 - `install.sh` / `install.ps1` download release binaries from GitHub Releases. `release.yml` builds them with `-trimpath -ldflags="-s -w"`.
 

@@ -27,6 +27,11 @@ type StoredTokens struct {
 	RefreshToken          string    `json:"refresh_token"`
 	AccessTokenExpiresAt  time.Time `json:"access_token_expires_at"`
 	RefreshTokenExpiresAt time.Time `json:"refresh_token_expires_at"`
+	// ClientID is the OAuth integration the tokens were issued to. It is not
+	// a secret; --setup uses it to write .mcp.json in a new directory
+	// without asking for the client ID again. Empty for sessions saved
+	// before v0.9.6 until their next token refresh.
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // TokenStore handles persistent OAuth token storage. It prefers the OS

@@ -14,6 +14,7 @@ type ExistingAuth struct {
 	Email          string
 	AccessExpires  time.Time
 	RefreshExpires time.Time
+	ClientID       string // OAuth integration the tokens belong to; empty for pre-v0.9.6 sessions
 }
 
 // Authenticated reports whether the identity was confirmed against the Webex
@@ -22,7 +23,7 @@ type ExistingAuth struct {
 func (e *ExistingAuth) Authenticated() bool { return e.DisplayName != "" || e.Email != "" }
 
 // CurrentAuth loads stored OAuth tokens and reports the existing session, if
-// any. It returns (nil, nil) when there is nothing usable — no tokens, or the
+// any. It returns nil when there is nothing usable — no tokens, or the
 // refresh token has expired — so the caller falls through to the interactive
 // setup flow. A non-nil result means the user is already signed in and setup
 // can be skipped (unless they explicitly want to switch or force re-auth).
@@ -59,6 +60,7 @@ func evalExistingAuth(tokens *auth.StoredTokens, now time.Time, validate func(st
 				Email:          email,
 				AccessExpires:  tokens.AccessTokenExpiresAt,
 				RefreshExpires: tokens.RefreshTokenExpiresAt,
+				ClientID:       tokens.ClientID,
 			}
 		}
 	}
@@ -70,6 +72,7 @@ func evalExistingAuth(tokens *auth.StoredTokens, now time.Time, validate func(st
 		return &ExistingAuth{
 			AccessExpires:  tokens.AccessTokenExpiresAt,
 			RefreshExpires: tokens.RefreshTokenExpiresAt,
+			ClientID:       tokens.ClientID,
 		}
 	}
 
